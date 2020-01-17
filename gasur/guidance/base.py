@@ -4,11 +4,11 @@ Created on Thu Jan 16 19:57:21 2020
 
 @author: ryan4
 """
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from ..enumerations import GuidanceType
 
 
-class Guidance:
+class Guidance(ABC):
 
     def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=0):
         self.type = guidancetype
