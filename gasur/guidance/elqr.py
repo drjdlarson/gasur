@@ -7,6 +7,7 @@ Created on Thu Jan 16 21:20:30 2020
 import numpy as np
 
 from .base import Guidance
+from ..utilities.math import get_state_space_derivatives
 from ..enumerations import GuidanceType
 
 
@@ -22,7 +23,7 @@ class ExtendedLQR(Guidance):
     def reinitialize_trajectories(self):
         pass
 
-    def update(self, interpreter):
+    def update(self, interpreter, dt):
         states, inputs, dyn_fnc_lst, inv_dyn_fnc_lst = \
             self.reinitialize_trajectories(interpreter)
         state_dims = states.shape
@@ -52,10 +53,13 @@ class ExtendedLQR(Guidance):
                 for obj in range(0, number_obj):
                     # propogate dynamics of current object
                     next_state = dyn_fnc_lst[obj](state[:, [obj]],
-                                                  guidance_inputs[:, [obj]])
+                                                  guidance_inputs[:, [obj]],
+                                                  dt)
 
                     # linearize inverse dynamics about propagated state
-                    A_bar, B_bar, c_bar = (1, 1, 1)
+                    A_bar, B_bar = get_state_space_derivatives(
+                            inv_dyn_fnc_lst[obj], next_state, 
+                            guidance_inputs[:, [obj]], )
 
                     # quadratize cost function about current object and frozen
                     # state
