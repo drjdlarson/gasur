@@ -60,7 +60,7 @@ class ExtendedLQR(LQR):
 
                     # linearize inverse dynamics about propagated state
                     A_bar, B_bar = get_state_space_derivatives(
-                            inv_dyn_fnc_lst[obj], next_state, 
+                            inv_dyn_fnc_lst[obj], next_state,
                             guidance_inputs[:, [obj]], )
 
                     # quadratize cost function about current object and frozen

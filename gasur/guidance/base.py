@@ -7,16 +7,18 @@ Created on Thu Jan 16 19:57:21 2020
 import numpy as np
 from scipy.stats import multivariate_normal as mvnpdf
 from scipy import linalg
-
 from abc import ABC, abstractmethod
+
 from ..enumerations import GuidanceType
+from ..exceptions import IncorrectNumberOfTargets
 
 
 class Guidance(ABC):
-    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=0):
+    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=1,
+                 target_states=np.array([])):
         self.type = guidancetype
         self.time_horizon_steps = horizon_steps
-        self.target_states = np.array([])
+        self.target_states = target_states
 
     @abstractmethod
     def reinitialize_trajectories(self):
@@ -28,18 +30,40 @@ class Guidance(ABC):
 
 
 class LQR(Guidance):
-    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=0,
-                 safety_factor=1):
-        super().__init(guidancetype=guidancetype, horizon_steps=horizon_steps)
+    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=1,
+                 target_states=np.array([]), safety_factor=1,
+                 target_covariances=np.array([]), target_weights=np.array([])):
+        super().__init__(guidancetype=guidancetype,
+                         horizon_steps=horizon_steps,
+                         target_states=target_states)
         self.safety_factor = safety_factor
-        self.target_covariances = np.array([])
-        self.target_weights = np.array([])
+        self.update_targets(target_states, target_covariances, target_weights)
 
     def reinitialize_trajectories(self):
         pass
 
     def update(self):
         pass
+
+    def update_targets(self, target_states, target_covariances,
+                       target_weights):
+        self.target_states = target_states
+        num_targets = self.target_states.shape[1]
+
+        try:
+            given_num = target_covariances.shape[2]
+        except IndexError:
+            raise IncorrectNumberOfTargets(num_targets,
+                                           target_covariances.size)
+        if num_targets != given_num:
+            raise IncorrectNumberOfTargets(num_targets, given_num)
+        else:
+            self.target_covariances = target_covariances
+
+        if num_targets != target_weights.size:
+            raise IncorrectNumberOfTargets(num_targets, target_weights.size)
+        else:
+            self.target_weights = target_weights / np.sum(target_weights)
 
     def target_center(self):
         return np.reshape(np.sum(self.target_states, axis=1)

@@ -16,8 +16,8 @@ setuptools.setup(name='gasur',
       packages=setuptools.find_packages(),
       install_requires=[
           'numpy',
+          'scipy'
       ],
-      test_suite='nose.collector',
-      tests_require=['nose'],
+      tests_require=['pytest'],
       include_package_data=True,
       zip_safe=False)
