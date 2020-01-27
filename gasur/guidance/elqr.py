@@ -6,12 +6,12 @@ Created on Thu Jan 16 21:20:30 2020
 """
 import numpy as np
 
-from .base import Guidance
+from .base import LQR
 from ..utilities.math import get_state_space_derivatives
 from ..enumerations import GuidanceType
 
 
-class ExtendedLQR(Guidance):
+class ExtendedLQR(LQR):
     def __init__(self):
         super().__init__(guidancetype=GuidanceType.ELQR)
         self.q_matrix = 0
@@ -20,8 +20,10 @@ class ExtendedLQR(Guidance):
         self.convergence_threshold = 0.1
         self.max_iterations = 10
 
+
     def reinitialize_trajectories(self):
         pass
+
 
     def update(self, interpreter, dt):
         states, inputs, dyn_fnc_lst, inv_dyn_fnc_lst = \
@@ -118,3 +120,16 @@ class ExtendedLQR(Guidance):
             # save trajectories, guidance gains, cost-to-go, and cost-to come
             # for reinitialization next guidance update
             
+
+
+    def quadratize_cost(self, states, guidance_input, time_step, state_0,
+                        gaussian_weights, gaussian_covariances, guassian_ind):
+        cost_jacobian, cost_hessian = get_cost_jacobian_hessian()
+
+        if time_step == 0:
+            Q = self.q_matrix
+        else:
+            Q = cost_hessian
+
+        
+        return
