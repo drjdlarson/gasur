@@ -70,8 +70,7 @@ class LQR(Guidance):
                           / self.target_states.shape[1],
                           self.targets.shape[0], 1)
 
-    def cost_function(self, obj_weights, obj_states, obj_inputs,
-                      obj_covariances):
+    def cost_function(self, obj_weights, obj_states, obj_covariances):
         target_center = self.target_center()
         num_targets = self.target_states.shape[1]
         num_objects = obj_states.shape[1]
