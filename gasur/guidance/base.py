@@ -29,48 +29,16 @@ class Guidance(ABC):
         pass
 
 
-class LQR(Guidance):
-    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=1,
-                 target_states=np.array([]), safety_factor=1,
-                 target_covariances=np.array([]), target_weights=np.array([])):
-        super().__init__(guidancetype=guidancetype,
-                         horizon_steps=horizon_steps,
-                         target_states=target_states)
-        self.safety_factor = safety_factor
-        self.update_targets(target_states, target_covariances, target_weights)
-
+class DensityBasedGuidance(Guidance):
+    @abstractmethod
     def reinitialize_trajectories(self):
         pass
 
+    @abstractmethod
     def update(self):
         pass
 
-    def update_targets(self, target_states, target_covariances,
-                       target_weights):
-        self.target_states = target_states
-        num_targets = self.target_states.shape[1]
-
-        try:
-            given_num = target_covariances.shape[2]
-        except IndexError:
-            raise IncorrectNumberOfTargets(num_targets,
-                                           target_covariances.size)
-        if num_targets != given_num:
-            raise IncorrectNumberOfTargets(num_targets, given_num)
-        else:
-            self.target_covariances = target_covariances
-
-        if num_targets != target_weights.size:
-            raise IncorrectNumberOfTargets(num_targets, target_weights.size)
-        else:
-            self.target_weights = target_weights / np.sum(target_weights)
-
-    def target_center(self):
-        return np.reshape(np.sum(self.target_states, axis=1)
-                          / self.target_states.shape[1],
-                          self.targets.shape[0], 1)
-
-    def cost_function(self, obj_weights, obj_states, obj_covariances):
+    def density_based_cost(self, obj_weights, obj_states, obj_covariances):
         target_center = self.target_center()
         num_targets = self.target_states.shape[1]
         num_objects = obj_states.shape[1]
@@ -154,6 +122,60 @@ class LQR(Guidance):
                                                  * max_var_target * num_targets
                                                  * sum_obj_target) \
             + sum_target_target + alpha*quad
+
+    def update_targets(self, target_states, target_covariances,
+                       target_weights):
+        self.target_states = target_states
+        num_targets = self.target_states.shape[1]
+
+        try:
+            given_num = target_covariances.shape[2]
+        except IndexError:
+            raise IncorrectNumberOfTargets(num_targets,
+                                           target_covariances.size)
+        if num_targets != given_num:
+            raise IncorrectNumberOfTargets(num_targets, given_num)
+        else:
+            self.target_covariances = target_covariances
+
+        if num_targets != target_weights.size:
+            raise IncorrectNumberOfTargets(num_targets, target_weights.size)
+        else:
+            self.target_weights = target_weights / np.sum(target_weights)
+
+    def target_center(self):
+        return np.reshape(np.sum(self.target_states, axis=1)
+                          / self.target_states.shape[1],
+                          self.targets.shape[0], 1)
+
+
+# TODO: remove this class and rethink how to structure code here
+class LQR(Guidance):
+    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=1,
+                 target_states=np.array([]), Q=np.array([]), R=np.array([])):
+        super().__init__(guidancetype=guidancetype,
+                         horizon_steps=horizon_steps,
+                         target_states=target_states)
+        self.state_cost_matrix = Q
+        self.control_cost_matrix = R
+
+    def reinitialize_trajectories(self):
+        pass
+
+    def update(self):
+        pass
+
+    # TODO: change this to basic quadratic cost function, derived classes
+    # can implement their own quadratic form
+    def cost_function(self, states, control_inputs, desired_state,
+                      nominal_control):
+        num_time_steps = states.shape[1]
+        cost = 0
+        for tt in range(0, num_time_steps):
+            state_diff = states[:, tt] - desired_state
+            control_diff = control_inputs[:, tt] - nominal_control
+            cost += state_diff.T @ self.state_cost_matrix  @ state_diff \
+                + control_diff.T @ self.control_cost_matrix @ control_diff
 
     def get_cost_jacobian_hessian(self):
         pass
