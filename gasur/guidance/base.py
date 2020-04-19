@@ -1,52 +1,283 @@
 # -*- coding: utf-8 -*-
 """
-Created on Thu Jan 16 19:57:21 2020
+Created on Fri Feb 28 11:18:28 2020
 
 @author: ryan4
 """
 import numpy as np
+import scipy.linalg as la
 from scipy.stats import multivariate_normal as mvnpdf
-from scipy import linalg
-from abc import ABC, abstractmethod
 
-from ..enumerations import GuidanceType
-from ..exceptions import IncorrectNumberOfTargets
+import ..math
 
 
-class Guidance(ABC):
-    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=1,
-                 target_states=np.array([])):
-        self.type = guidancetype
-        self.time_horizon_steps = horizon_steps
-        self.target_states = target_states
+class BaseLQR:
+    def __init__(self, **kwargs):
+        self.state_penalty = kwargs['Q']
+        self.ctrl_penalty = kwargs['R']
 
-    @abstractmethod
-    def reinitialize_trajectories(self):
-        pass
+    def iterate(self, **kwargs):
+        # process input arguments
+        state_penalty = kwargs['Q']
+        del kwargs['Q']
+        ctrl_penalty = kwargs['R']
+        del kwargs['R']
+        F = kwargs['F']
+        del kwargs['F']
+        G = kwargs['G']
+        del kwargs['G']
+        cross_penalty = kwargs.get('cross_penalty',
+                                   np.zeros(F.shape[0], G.shape[0]))
+        total_time_steps = kwargs.get('total_time_steps', None)
+        inf_horizon = total_time_steps is None
 
-    @abstractmethod
-    def update(self):
-        pass
+        if inf_horizon:
+            P = la.solve_discrete_are(F, G, state_penalty, ctrl_penalty)
+            feedback_gain = la.inv(G.T @ P @ G + ctrl_penalty) \
+                @ (G.T @ P @ F + cross_penalty)
+            return feedback_gain
+        else:
+            # ##TODO: implement
+            c = self.__class__.__name__
+            name = self.iterate.__name__
+            msg = '{}.{} not implemented'.format(c, name)
+            raise RuntimeError(msg)
 
 
-class DensityBasedGuidance(Guidance):
-    @abstractmethod
-    def reinitialize_trajectories(self):
-        pass
+class BaseELQR(BaseLQR):
+    def __init__(self, **kwargs):
+        self.max_iters = kwargs.get('max_iters', 50)
+        super().__init__(**kwargs)
 
-    @abstractmethod
-    def update(self):
-        pass
+    def initialize(self, **kwargs):
+        # ##TODO: implement
+        msg = '{}.{} not implemented'.format(self.__class__.__name__,
+                                             self.initialize.__name__)
+        raise RuntimeError(msg)
 
-    def density_based_cost(self, obj_weights, obj_states, obj_covariances):
+    def quadratize_cost(self, x_hat, u_hat, **kwargs):
+        '''
+        This assumes the true cost function is given by:
+            c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
+            c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
+            c_end = 1/2(x - x_end)^T Q (x - x_end)
+        '''
+        timestep = kwargs['timestep']
+        x_start = kwargs['x_start']
+        u_nom = kwargs['u_nom']
+        if timestep == 0:
+            Q = self.state_penalty
+            q = -Q @ x_start
+        else:
+            Q, q = self.quadratize_non_quad_state(x_hat, u_hat, **kwargs)
+
+        R = self.ctrl_penalty
+        r = -R @ u_nom
+        P = np.zeros((u_nom.size, x_start.size))
+
+        return P, Q, R, q, r
+
+    def quadratize_non_quad_state(self, x_hat, u_hat, **kwargs):
+        # ##TODO: implement
+        name = self.quadratize_non_quad_state.__name__
+        msg = '{}.{} not implemented'.format(self.__class__.__name__, name)
+        raise RuntimeError(msg)
+
+    def quadratize_final_cost(self, x_hat, u_hat, **kwargs):
+        '''
+        This assumes the true cost function is given by:
+            c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
+            c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
+            c_end = 1/2(x - x_end)^T Q (x - x_end)
+        '''
+        Q = self.state_penalty
+        q = -Q @ kwargs['x_end']
+
+        return Q, q
+
+    def iterate(self, **kwargs):
+        cost_function = kwargs['cost_function']
+        final_cost_function = kwargs['final_cost_function']
+        dynamics_fnc = kwargs['dynamics_fnc']
+
+        feedback, feedforward, cost_go_mat, cost_go_vec, cost_come_mat, \
+            cost_come_vec, x_hat = self.initialize(**kwargs)
+
+        converged = False
+        old_cost = 0
+        for iteration in range(0, self.max_iters):
+            # forward pass
+            x_hat, u_hat, feedback, feedforward, cost_come_mat, \
+                cost_come_vec = self.forard_pass(x_hat, feedback, feedforward,
+                                                 iteration, cost_come_mat,
+                                                 cost_come_vec, cost_go_mat,
+                                                 cost_go_vec, **kwargs)
+
+            # quadratize final cost
+            cost_go_mat[-1], cost_go_vec[-1] = \
+                self.quadratize_final_cost(x_hat, u_hat, **kwargs)
+            x_hat = -la.inv(cost_go_mat[-1] + cost_come_mat[-1]) \
+                @ (cost_go_vec[-1] + cost_come_vec[-1])
+
+            # backward pass
+            x_hat, u_hat, feedback, feedforward, cost_go_mat, \
+                cost_go_vec = self.backward_pass(x_hat, feedback, feedforward,
+                                                 iteration, cost_come_mat,
+                                                 cost_come_vec, cost_go_mat,
+                                                 cost_go_vec, **kwargs)
+
+            # find real cost of trajectory
+            state = x_hat
+            cur_cost = 0
+            for kk in range(0, len(feedback)-1):
+                ctrl_input = feedback[kk] @ state + feedforward[kk]
+                cur_cost += cost_function(state, ctrl_input, **kwargs)
+                state = dynamics_fnc(state, ctrl_input, **kwargs)
+            cur_cost += final_cost_function(state, **kwargs)
+
+            # check for convergence
+            if iteration != 0:
+                converged = np.abs(old_cost - cur_cost) < self.cost_tol
+
+            old_cost = cur_cost
+            if converged:
+                break
+
+        return feedback, feedforward
+
+    def cost_to_go(self, cost_go_mat, cost_go_vec, P, Q, R, q, r,
+                   state_mat, input_mat, c_vec, **kwargs):
+        c_mat = input_mat.T @ cost_go_mat @ state_mat + P
+        d_mat = state_mat.T @ cost_go_mat @ state_mat + Q
+        e_mat = input_mat.T @ cost_go_mat @ input_mat + R
+        tmp = (cost_go_vec + cost_go_mat @ c_vec)
+        d_vec = state_mat.T @ tmp + q
+        e_vec = input_mat.T@ tmp + r
+
+        e_inv = la.inv(e_mat)
+        feedback = -e_inv @ c_mat
+        feedforward = -e_inv @ e_vec
+
+        cost_go_mat_out = d_mat + c_mat.T @ feedback
+        cost_go_vec_out = d_vec + c_mat.T @ feedforward
+
+        return cost_go_mat_out, cost_go_vec_out, feedback, feedforward
+
+    def cost_to_come(self, cost_come_mat, cost_come_vec, P, Q, R, q, r,
+                     state_mat_bar, input_mat_bar, c_bar_vec, **kwargs):
+        S_bar_Q = cost_come_mat + Q
+        s_bar_q_sqr_c_bar = cost_come_vec + q + S_bar_Q @ c_bar_vec
+
+        c_bar_mat = input_mat_bar.T @ S_bar_Q @ state_mat_bar \
+            + P @ state_mat_bar
+        d_bar_mat = state_mat_bar.T @ S_bar_Q @ state_mat_bar
+        e_bar_mat = input_mat_bar.T @ S_bar_Q @ input_mat_bar \
+            + R + P @ input_mat_bar + input_mat_bar.T @ P.T
+        d_bar_vec = state_mat_bar.T @ s_bar_q_sqr_c_bar
+        e_bar_vec = input_mat_bar.T @ s_bar_q_sqr_c_bar + r + P @ c_bar_vec
+
+        # find controller gains
+        e_inv = la.inv(e_bar_mat)
+        feedback = -e_inv @ c_bar_mat
+        feedforward = -e_inv @ e_bar_vec
+
+        # update cost-to-come
+        cost_come_mat_out = d_bar_mat + c_bar_mat.T @ feedback
+        cost_come_vec_out = d_bar_vec + c_bar_mat.T @ feedforward
+
+        return cost_come_mat_out, cost_come_vec_out, feedback, feedforward
+
+    def backward_pass(self, x_hat, feedback, feedforward, iteration,
+                      cost_come_mat, cost_come_vec, cost_go_mat, cost_go_vec,
+                      **kwargs):
+        dynamics_fnc = kwargs['dynamics']
+        inv_dynamics_fnc = kwargs['inverse_dynamics']
+
+        max_time_steps = len(cost_come_mat)
+        for kk in range(max_time_steps - 1, -1, -1):
+            u_hat = feedback[kk] @ x_hat + feedforward[kk]
+            x_hat_prime = inv_dynamics_fnc(x_hat, u_hat, **kwargs)
+
+            state_mat = get_state_jacobian(x_hat_prime, u_hat,
+                                           dynamics_fnc, **kwargs)
+            input_mat = get_input_jacobian(x_hat_prime, u_hat,
+                                           dynamics_fnc, **kwargs)
+            c_vec = x_hat - state_mat @ x_hat_prime - input_mat @ u_hat
+
+            P, Q, R, q, r = self.quadratize_cost(x_hat_prime, u_hat, iteration)
+
+            (cost_go_mat[kk], cost_go_vec[kk], feedback[kk],
+             feedforward[kk]) = self.cost_to_go(cost_come_mat[kk+1],
+                                                cost_come_vec[kk+1],
+                                                P, Q, R, q, r, state_mat,
+                                                input_mat, c_vec)
+
+            # update state estimate
+            x_hat = -la.inv(cost_go_mat[kk] + cost_come_mat[kk]) \
+                @ (cost_go_vec[kk] + cost_come_vec[kk])
+
+        return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
+                cost_come_vec)
+
+    def forard_pass(self, x_hat, feedback, feedforward, iteration,
+                    cost_come_mat, cost_come_vec, cost_go_mat, cost_go_vec,
+                    **kwargs):
+        dynamics_fnc = kwargs['dynamics']
+        inv_dynamics_fnc = kwargs['inverse_dynamics']
+
+        max_time_steps = len(cost_come_mat)
+        for kk in range(0, max_time_steps - 1):
+            u_hat = feedback[kk] @ x_hat + feedforward[kk]
+            x_hat_prime = dynamics_fnc(x_hat, u_hat, **kwargs)
+
+            state_mat_bar = get_state_jacobian(x_hat_prime, u_hat,
+                                               inv_dynamics_fnc, **kwargs)
+            input_mat_bar = get_input_jacobian(x_hat_prime, u_hat,
+                                               inv_dynamics_fnc, **kwargs)
+            c_bar_vec = x_hat - state_mat_bar @ x_hat_prime \
+                - input_mat_bar @ u_hat
+
+            P, Q, R, q, r = self.quadratize_cost(x_hat, u_hat, iteration)
+
+            (cost_come_mat[kk+1], cost_come_vec[kk+1], feedback[kk],
+             feedforward[kk]) = self.cost_to_come(cost_come_mat[kk],
+                                                  cost_come_vec[kk],
+                                                  P, Q, R, q, r, state_mat_bar,
+                                                  input_mat_bar, c_bar_vec)
+
+            # update state estimate
+            x_hat = -la.inv(cost_go_mat[kk+1] + cost_come_mat[kk+1]) \
+                @ (cost_go_vec[kk+1] + cost_come_vec[kk+1])
+
+        return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
+                cost_come_vec)
+
+
+class DensityBased:
+    def __init__(self, wayareas=[], saftey_factor=1, y_ref=0.9):
+        self.targets = wayareas
+        self.saftey_factor = saftey_factor
+        self.y_ref = y_ref
+
+    def density_based_cost(self, **kwargs):
+        key = 'obj_weights'
+        obj_weights = kwargs[key]
+        del kwargs[key]
+        key = 'obj_states'
+        obj_states = kwargs[key]
+        del kwargs[key]
+        key = 'obj_covariances'
+        obj_covariances = kwargs[key]
+        del kwargs[key]
+
         target_center = self.target_center()
-        num_targets = self.target_states.shape[1]
+        num_targets = len(self.targets.means)
         num_objects = obj_states.shape[1]
 
         # find radius of influence and shift
         max_dist = 0
-        for ii in range(0, num_targets):
-            diff = self.target_states[:, ii] - target_center
+        for tar_mean in self.targets.means:
+            diff = tar_mean - target_center
             dist = np.sqrt(diff.transpose() @ diff)
             if dist > max_dist:
                 max_dist = dist
@@ -60,13 +291,13 @@ class DensityBasedGuidance(Guidance):
             dist = np.sqrt(diff.transpose @ diff)
             if dist > max_dist:
                 max_dist = dist
-        alpha = 1 / (1 + np.exp(-max_dist - shift))
+        activator = 1 / (1 + np.exp(-max_dist - shift))
 
         # get maximum stand
         max_var_obj = np.max(np.diag(obj_covariances))
         max_var_target = 0
-        for ii in range(0, num_targets):
-            var = np.max(np.diag(self.target_covariances[:, :, ii].squeeze()))
+        for cov in self.targets.covariances:
+            var = np.max(np.diag(cov))
             if var > max_var_target:
                 max_var_target = var
 
@@ -78,104 +309,133 @@ class DensityBasedGuidance(Guidance):
         for outer_obj in range(0, num_objects):
             # object to object
             for inner_obj in range(0, num_objects):
-                comb_cov = obj_covariances[:, :, outer_obj].squeeze() \
-                            + obj_covariances[:, :, inner_obj].squeeze()
+                comb_cov = obj_covariances[outer_obj] \
+                            + obj_covariances[inner_obj]
                 sum_obj_obj += obj_weights[outer_obj] \
                     * obj_weights[inner_obj] \
-                    * mvnpdf.pdf(obj_states[:, outer_obj],
-                                 mean=obj_states[:, inner_obj],
+                    * mvnpdf.pdf(obj_states[outer_obj],
+                                 mean=obj_states[inner_obj],
                                  covariance=comb_cov)
 
             # object to target and quadratic
-            for tar_ind in range(0, num_targets):
-                # object to object
-                comb_cov = obj_covariances[:, :, outer_obj].squeeze() \
-                            + self.target_covariances[:, :, tar_ind].squeeze()
+            for ii in range(0, num_targets):
+                # object to target
+                comb_cov = obj_covariances[outer_obj] \
+                    + self.targets.covariances[ii]
                 sum_obj_target += obj_weights[outer_obj] \
-                    * self.target_weights[tar_ind] \
-                    * mvnpdf.pdf(obj_states[:, outer_obj],
-                                 mean=self.target_states[:, tar_ind],
+                    * self.targets.weights[ii] \
+                    * mvnpdf.pdf(obj_states[outer_obj],
+                                 mean=self.targets.means[ii],
                                  covariance=comb_cov)
 
                 # quadratic
-                diff = obj_states[:, [outer_obj]] \
-                    - self.target_states[:, [tar_ind]]
+                diff = obj_states[outer_obj] - self.targets.means[ii]
                 log_term = np.log((2*np.pi)**(-0.5*num_targets) *
-                                  linalg.det(comb_cov)**-0.5) \
-                    - 0.5 * diff.transpose() @ linalg.inv(comb_cov) @ diff
-                quad += obj_weights[outer_obj] * self.target_weights[tar_ind] \
+                                  la.det(comb_cov)**-0.5) \
+                    - 0.5 * diff.transpose() @ la.inv(comb_cov) @ diff
+                quad += obj_weights[outer_obj] * self.targets.weights[ii] \
                     * log_term
 
         # target to target
-        for outer_tar in range(0, num_targets):
-            for inner_tar in range(0, num_targets):
-                comb_cov = self.target_covariances[:, :, outer_tar].squeeze() \
-                            + self.target_covariances[:, :,
-                                                      inner_tar].squeeze()
-                sum_target_target += self.target_weights[outer_tar] \
-                    * self.target_weights[inner_tar] \
-                    * mvnpdf.pdf(self.target_states[:, outer_tar],
-                                 mean=self.target_states[:, inner_tar],
+        for outer in range(0, num_targets):
+            for inner in range(0, num_targets):
+                comb_cov = self.targets.covariances[outer] \
+                    + self.targets.covariances[inner]
+                sum_target_target += self.targets.weights[outer] \
+                    * self.targets.weights[inner] \
+                    * mvnpdf.pdf(self.targets.means[outer],
+                                 mean=self.targets.means[inner],
                                  covariance=comb_cov)
 
         return 10 * num_objects * max_var_obj * (sum_obj_obj - 20
                                                  * max_var_target * num_targets
                                                  * sum_obj_target) \
-            + sum_target_target + alpha*quad
+            + sum_target_target + activator * quad
 
-    def update_targets(self, target_states, target_covariances,
-                       target_weights):
-        self.target_states = target_states
-        num_targets = self.target_states.shape[1]
+    def convert_waypoints(self, **kwargs):
+        waypoints = kwargs['waypoints']
+        del kwargs['waypoints']
+        center_len = waypoints[0].size
+        num_waypoints = len(waypoints)
+        combined_centers = np.zeros((center_len, num_waypoints+1))
 
-        try:
-            given_num = target_covariances.shape[2]
-        except IndexError:
-            raise IncorrectNumberOfTargets(num_targets,
-                                           target_covariances.size)
-        if num_targets != given_num:
-            raise IncorrectNumberOfTargets(num_targets, given_num)
+        # get overall center, build collection of centers
+        for ii in range(0, num_waypoints):
+            combined_centers[:, [ii]] = waypoints[ii].reshape((center_len, 1))
+            combined_centers[:, [-1]] += combined_centers[:, [ii]]
+        combined_centers[:, [-1]] = combined_centers[:, [-1]] / num_waypoints
+
+        # find directions to each point
+        directions = np.zeros((center_len, num_waypoints + 1, num_waypoints
+                               + 1))
+        for start_point in range(0, num_waypoints + 1):
+            for end_point in range(0, num_waypoints + 1):
+                directions[:, start_point, end_point] = \
+                    (combined_centers[:, end_point]
+                     - combined_centers[:, start_point]).reshape(center_len, 1,
+                                                                 1)
+
+        def find_principal_components(data):
+            num_samps = data.shape[0]
+            num_feats = data.shape[1]
+
+            mean = np.sum(data, 1) / num_samps
+            covars = np.zeros((num_feats, num_feats))
+            for ii in range(0, num_feats):
+                for jj in range(0, num_feats):
+                    acc = 0
+                    for samp in range(0, num_samps):
+                        acc += (data[samp, ii] - mean[ii]) \
+                                * (data[samp, jj] - mean[jj])
+                    covars[ii, jj] = acc / num_samps
+            (w, comps) = la.eig(covars)
+            return comps.T()
+
+        def find_largest_proj_dist(new_dirs, old_dirs):
+            vals = np.zeros(new_dirs.shape[0])
+            for ii in range(0, new_dirs.shape[1]):
+                for jj in range(0, old_dirs.shape[1]):
+                    proj = np.abs(new_dirs[:, [ii]].T @ old_dirs[:, [jj]])
+                    if proj > vals[ii]:
+                        vals[ii] = proj
+            return np.diag(vals)
+
+        weight = 1 / num_waypoints
+        wayareas = GaussianMixture()
+        for wp_ind in range(0, num_waypoints):
+            center = waypoints[wp_ind].reshape((center_len, 1))
+
+            sample_data = combined_centers
+            sample_data = np.delete(sample_data, wp_ind, 1)
+            sample_dirs = directions[:, wp_ind, :].squeeze()
+            sample_dirs = np.delete(sample_dirs, wp_ind, 1)
+            comps = find_principal_components(sample_data.T)
+            vals = find_largest_proj_dist(comps, sample_dirs)
+
+            covariance = comps @ vals @ la.inv(comps)
+
+            wayareas.means.append(center)
+            wayareas.covariances.append(covariance)
+            wayareas.weight.append(weight)
+        return wayareas
+
+    def update_targets(self, **kwargs):
+        key = 'new_waypoints'
+        new_waypoints = kwargs[key]
+        del kwargs[key]
+        reset = kwargs.get('reset', False)
+        if reset:
+            self.wayareas = self.convert_waypoints(new_waypoints)
         else:
-            self.target_covariances = target_covariances
-
-        if num_targets != target_weights.size:
-            raise IncorrectNumberOfTargets(num_targets, target_weights.size)
-        else:
-            self.target_weights = target_weights / np.sum(target_weights)
+            new_areas = self.convert_waypoints(new_waypoints)
+            for ii in range(0, len(new_areas.means)):
+                self.wayareas.means.append(new_areas.means[ii])
+                self.wayareas.covariances.append(new_areas.covariances[ii])
+                self.wayareas.weights.append(new_areas.weights[ii])
 
     def target_center(self):
-        return np.reshape(np.sum(self.target_states, axis=1)
-                          / self.target_states.shape[1],
-                          self.targets.shape[0], 1)
-
-
-# TODO: remove this class and rethink how to structure code here
-class LQR(Guidance):
-    def __init__(self, guidancetype=GuidanceType.NONE, horizon_steps=1,
-                 target_states=np.array([]), Q=np.array([]), R=np.array([])):
-        super().__init__(guidancetype=guidancetype,
-                         horizon_steps=horizon_steps,
-                         target_states=target_states)
-        self.state_cost_matrix = Q
-        self.control_cost_matrix = R
-
-    def reinitialize_trajectories(self):
-        pass
-
-    def update(self):
-        pass
-
-    # TODO: change this to basic quadratic cost function, derived classes
-    # can implement their own quadratic form
-    def cost_function(self, states, control_inputs, desired_state,
-                      nominal_control):
-        num_time_steps = states.shape[1]
-        cost = 0
-        for tt in range(0, num_time_steps):
-            state_diff = states[:, tt] - desired_state
-            control_diff = control_inputs[:, tt] - nominal_control
-            cost += state_diff.T @ self.state_cost_matrix  @ state_diff \
-                + control_diff.T @ self.control_cost_matrix @ control_diff
-
-    def get_cost_jacobian_hessian(self):
-        pass
+        summed = np.zeros(self.targets.means[0].shape)
+        num_tars = len(self.targets.means)
+        for ii in range(0, num_tars):
+            summed += self.targets.means[ii]
+        return summed / num_tars
