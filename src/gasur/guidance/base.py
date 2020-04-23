@@ -8,7 +8,8 @@ import numpy as np
 import scipy.linalg as la
 from scipy.stats import multivariate_normal as mvnpdf
 
-import ..math
+#from ..estimator import GaussianMixture
+from gasur.utilities.math import get_state_jacobian, get_input_jacobian
 
 
 class BaseLQR:
@@ -18,22 +19,19 @@ class BaseLQR:
 
     def iterate(self, **kwargs):
         # process input arguments
-        state_penalty = kwargs['Q']
-        del kwargs['Q']
-        ctrl_penalty = kwargs['R']
-        del kwargs['R']
         F = kwargs['F']
         del kwargs['F']
         G = kwargs['G']
         del kwargs['G']
         cross_penalty = kwargs.get('cross_penalty',
-                                   np.zeros(F.shape[0], G.shape[0]))
+                                   np.zeros((G.shape[1], F.shape[0])))
         total_time_steps = kwargs.get('total_time_steps', None)
         inf_horizon = total_time_steps is None
 
         if inf_horizon:
-            P = la.solve_discrete_are(F, G, state_penalty, ctrl_penalty)
-            feedback_gain = la.inv(G.T @ P @ G + ctrl_penalty) \
+            P = la.solve_discrete_are(F, G, self.state_penalty,
+                                      self.ctrl_penalty)
+            feedback_gain = la.inv(G.T @ P @ G + self.ctrl_penalty) \
                 @ (G.T @ P @ F + cross_penalty)
             return feedback_gain
         else:
@@ -49,11 +47,18 @@ class BaseELQR(BaseLQR):
         self.max_iters = kwargs.get('max_iters', 50)
         super().__init__(**kwargs)
 
-    def initialize(self, **kwargs):
-        # ##TODO: implement
-        msg = '{}.{} not implemented'.format(self.__class__.__name__,
-                                             self.initialize.__name__)
-        raise RuntimeError(msg)
+    def initialize(self, x_start, n_inputs, **kwargs):
+        n_states = x_start.size
+        x_hat = x_start
+        feedback = kwargs.get('feedback', np.zeros((n_inputs, n_states)))
+        feedforward = kwargs.get('feedforward', np.zeros((n_inputs, 1)))
+        cost_go_mat = kwargs.get('cost_go_mat', np.zeros((n_states, n_states)))
+        cost_go_vec = kwargs.get('cost_go_vec', np.zeros((n_states, 1)))
+        cost_come_mat = kwargs.get('cost_come_mat',
+                                   np.zeros((n_states, n_states)))
+        cost_come_vec = kwargs.get('cost_come_vec', np.zeros((n_states, 1)))
+        return (feedback, feedforward, cost_go_mat, cost_go_vec,
+                cost_come_mat, cost_come_vec, x_hat)
 
     def quadratize_cost(self, x_hat, u_hat, **kwargs):
         '''
@@ -78,10 +83,9 @@ class BaseELQR(BaseLQR):
         return P, Q, R, q, r
 
     def quadratize_non_quad_state(self, x_hat, u_hat, **kwargs):
-        # ##TODO: implement
-        name = self.quadratize_non_quad_state.__name__
-        msg = '{}.{} not implemented'.format(self.__class__.__name__, name)
-        raise RuntimeError(msg)
+        Q = self.state_penalty
+        q = np.zeros((x_hat.size, 1))
+        return Q, q
 
     def quadratize_final_cost(self, x_hat, u_hat, **kwargs):
         '''
@@ -90,18 +94,20 @@ class BaseELQR(BaseLQR):
             c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
             c_end = 1/2(x - x_end)^T Q (x - x_end)
         '''
+        x_end = kwargs['x_end']
         Q = self.state_penalty
-        q = -Q @ kwargs['x_end']
+        q = -Q @ x_end
 
         return Q, q
 
-    def iterate(self, **kwargs):
+    def iterate(self, x_start, x_end, u_nom, **kwargs):
         cost_function = kwargs['cost_function']
         final_cost_function = kwargs['final_cost_function']
-        dynamics_fnc = kwargs['dynamics_fnc']
+        dynamics_fncs = kwargs['dynamics_fncs']
 
         feedback, feedforward, cost_go_mat, cost_go_vec, cost_come_mat, \
-            cost_come_vec, x_hat = self.initialize(**kwargs)
+            cost_come_vec, x_hat = self.initialize(x_start, u_nom.size,
+                                                   **kwargs)
 
         converged = False
         old_cost = 0
@@ -109,22 +115,24 @@ class BaseELQR(BaseLQR):
             # forward pass
             x_hat, u_hat, feedback, feedforward, cost_come_mat, \
                 cost_come_vec = self.forard_pass(x_hat, feedback, feedforward,
-                                                 iteration, cost_come_mat,
+                                                 cost_come_mat,
                                                  cost_come_vec, cost_go_mat,
-                                                 cost_go_vec, **kwargs)
+                                                 cost_go_vec, x_start=x_start,
+                                                 u_nom=u_nom, **kwargs)
 
             # quadratize final cost
             cost_go_mat[-1], cost_go_vec[-1] = \
-                self.quadratize_final_cost(x_hat, u_hat, **kwargs)
+                self.quadratize_final_cost(x_hat, u_hat, x_end=x_end, **kwargs)
             x_hat = -la.inv(cost_go_mat[-1] + cost_come_mat[-1]) \
                 @ (cost_go_vec[-1] + cost_come_vec[-1])
 
             # backward pass
             x_hat, u_hat, feedback, feedforward, cost_go_mat, \
                 cost_go_vec = self.backward_pass(x_hat, feedback, feedforward,
-                                                 iteration, cost_come_mat,
+                                                 cost_come_mat,
                                                  cost_come_vec, cost_go_mat,
-                                                 cost_go_vec, **kwargs)
+                                                 cost_go_vec, x_start=x_start,
+                                                 u_nom=u_nom, **kwargs)
 
             # find real cost of trajectory
             state = x_hat
@@ -132,7 +140,7 @@ class BaseELQR(BaseLQR):
             for kk in range(0, len(feedback)-1):
                 ctrl_input = feedback[kk] @ state + feedforward[kk]
                 cur_cost += cost_function(state, ctrl_input, **kwargs)
-                state = dynamics_fnc(state, ctrl_input, **kwargs)
+                state = dynamics_fncs(state, ctrl_input, **kwargs)
             cur_cost += final_cost_function(state, **kwargs)
 
             # check for convergence
@@ -187,24 +195,25 @@ class BaseELQR(BaseLQR):
 
         return cost_come_mat_out, cost_come_vec_out, feedback, feedforward
 
-    def backward_pass(self, x_hat, feedback, feedforward, iteration,
+    def backward_pass(self, x_hat, feedback, feedforward,
                       cost_come_mat, cost_come_vec, cost_go_mat, cost_go_vec,
                       **kwargs):
-        dynamics_fnc = kwargs['dynamics']
-        inv_dynamics_fnc = kwargs['inverse_dynamics']
+        dynamics_fncs = kwargs['dynamics']
+        inv_dynamics_fncs = kwargs['inverse_dynamics']
 
         max_time_steps = len(cost_come_mat)
         for kk in range(max_time_steps - 1, -1, -1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
-            x_hat_prime = inv_dynamics_fnc(x_hat, u_hat, **kwargs)
+            x_hat_prime = inv_dynamics_fncs(x_hat, u_hat, **kwargs)
 
             state_mat = get_state_jacobian(x_hat_prime, u_hat,
-                                           dynamics_fnc, **kwargs)
+                                           dynamics_fncs, **kwargs)
             input_mat = get_input_jacobian(x_hat_prime, u_hat,
-                                           dynamics_fnc, **kwargs)
+                                           dynamics_fncs, **kwargs)
             c_vec = x_hat - state_mat @ x_hat_prime - input_mat @ u_hat
 
-            P, Q, R, q, r = self.quadratize_cost(x_hat_prime, u_hat, iteration)
+            P, Q, R, q, r = self.quadratize_cost(x_hat_prime, u_hat,
+                                                 timestep=kk, **kwargs)
 
             (cost_go_mat[kk], cost_go_vec[kk], feedback[kk],
              feedforward[kk]) = self.cost_to_go(cost_come_mat[kk+1],
@@ -219,25 +228,25 @@ class BaseELQR(BaseLQR):
         return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
                 cost_come_vec)
 
-    def forard_pass(self, x_hat, feedback, feedforward, iteration,
-                    cost_come_mat, cost_come_vec, cost_go_mat, cost_go_vec,
-                    **kwargs):
-        dynamics_fnc = kwargs['dynamics']
-        inv_dynamics_fnc = kwargs['inverse_dynamics']
+    def forard_pass(self, x_hat, feedback, feedforward, cost_come_mat,
+                    cost_come_vec, cost_go_mat, cost_go_vec, **kwargs):
+        dynamics_fncs = kwargs['dynamics']
+        inv_dynamics_fncs = kwargs['inverse_dynamics']
 
         max_time_steps = len(cost_come_mat)
         for kk in range(0, max_time_steps - 1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
-            x_hat_prime = dynamics_fnc(x_hat, u_hat, **kwargs)
+            x_hat_prime = dynamics_fncs(x_hat, u_hat, **kwargs)
 
             state_mat_bar = get_state_jacobian(x_hat_prime, u_hat,
-                                               inv_dynamics_fnc, **kwargs)
+                                               inv_dynamics_fncs, **kwargs)
             input_mat_bar = get_input_jacobian(x_hat_prime, u_hat,
-                                               inv_dynamics_fnc, **kwargs)
+                                               inv_dynamics_fncs, **kwargs)
             c_bar_vec = x_hat - state_mat_bar @ x_hat_prime \
                 - input_mat_bar @ u_hat
 
-            P, Q, R, q, r = self.quadratize_cost(x_hat, u_hat, iteration)
+            P, Q, R, q, r = self.quadratize_cost(x_hat, u_hat, timestep=kk,
+                                                 **kwargs)
 
             (cost_come_mat[kk+1], cost_come_vec[kk+1], feedback[kk],
              feedforward[kk]) = self.cost_to_come(cost_come_mat[kk],
@@ -252,7 +261,7 @@ class BaseELQR(BaseLQR):
         return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
                 cost_come_vec)
 
-
+'''
 class DensityBased:
     def __init__(self, wayareas=[], saftey_factor=1, y_ref=0.9):
         self.targets = wayareas
@@ -439,3 +448,4 @@ class DensityBased:
         for ii in range(0, num_tars):
             summed += self.targets.means[ii]
         return summed / num_tars
+'''

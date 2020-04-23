@@ -8,7 +8,7 @@ from ..estimator import GaussianMixture
 from .base import BaseELQR, DensityBased
 
 
-class ELQRGuidance(BaseELQR, DensityBased):
+class ELQRGuassian(BaseELQR, DensityBased):
     def __init__(self, cur_gaussians=[], **kwargs):
         self.cur_guassians = cur_gaussians
         super().__init__(**kwargs)
