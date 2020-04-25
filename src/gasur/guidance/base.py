@@ -16,6 +16,10 @@ class BaseLQR:
     def __init__(self, **kwargs):
         self.state_penalty = kwargs['Q']
         self.ctrl_penalty = kwargs['R']
+        def_rows = self.ctrl_penalty.shape[1]
+        def_cols = self.state_penalty.shape[0]
+        self.cross_penalty = kwargs.get('corss_penalty',
+                                        np.zeros((def_rows, def_cols)))
 
     def iterate(self, **kwargs):
         # process input arguments
@@ -23,8 +27,6 @@ class BaseLQR:
         del kwargs['F']
         G = kwargs['G']
         del kwargs['G']
-        cross_penalty = kwargs.get('cross_penalty',
-                                   np.zeros((G.shape[1], F.shape[0])))
         total_time_steps = kwargs.get('total_time_steps', None)
         inf_horizon = total_time_steps is None
 
@@ -32,7 +34,7 @@ class BaseLQR:
             P = la.solve_discrete_are(F, G, self.state_penalty,
                                       self.ctrl_penalty)
             feedback_gain = la.inv(G.T @ P @ G + self.ctrl_penalty) \
-                @ (G.T @ P @ F + cross_penalty)
+                @ (G.T @ P @ F + self.cross_penalty)
             return feedback_gain
         else:
             # ##TODO: implement
@@ -160,7 +162,7 @@ class BaseELQR(BaseLQR):
         e_mat = input_mat.T @ cost_go_mat @ input_mat + R
         tmp = (cost_go_vec + cost_go_mat @ c_vec)
         d_vec = state_mat.T @ tmp + q
-        e_vec = input_mat.T@ tmp + r
+        e_vec = input_mat.T @ tmp + r
 
         e_inv = la.inv(e_mat)
         feedback = -e_inv @ c_mat
@@ -204,7 +206,9 @@ class BaseELQR(BaseLQR):
         max_time_steps = len(cost_come_mat)
         for kk in range(max_time_steps - 1, -1, -1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
-            x_hat_prime = inv_dynamics_fncs(x_hat, u_hat, **kwargs)
+            x_hat_prime = np.zeros(x_hat.shape)
+            for ii, gg in enumerate(inv_dynamics_fncs):
+                x_hat_prime[ii] = gg(x_hat, u_hat, **kwargs)
 
             state_mat = get_state_jacobian(x_hat_prime, u_hat,
                                            dynamics_fncs, **kwargs)
@@ -236,7 +240,9 @@ class BaseELQR(BaseLQR):
         max_time_steps = len(cost_come_mat)
         for kk in range(0, max_time_steps - 1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
-            x_hat_prime = dynamics_fncs(x_hat, u_hat, **kwargs)
+            x_hat_prime = np.zeros(x_hat.shape)
+            for ii, ff in enumerate(dynamics_fncs):
+                x_hat_prime[ii] = ff(x_hat, u_hat, **kwargs)
 
             state_mat_bar = get_state_jacobian(x_hat_prime, u_hat,
                                                inv_dynamics_fncs, **kwargs)

@@ -15,4 +15,4 @@ def Q():
 
 @pytest.fixture(scope="session")
 def R():
-    return np.array([0.1])
+    return np.array([0.1]).reshape((1, 1))
