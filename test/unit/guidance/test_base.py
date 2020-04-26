@@ -145,8 +145,31 @@ class TestBaseELQR:
         test.assert_allclose(feedback, exp_feedback)
         test.assert_allclose(feedforward, exp_feedfor)
 
-    def test_forward_pass(self):
+    def test_forward_pass(self, Q, R, func_list):
+        # inputs
+        baseELQR = BaseELQR(Q=Q, R=R)
+        x_hat = np.arange(0, 2).reshape((2, 1))
+        feedback = [np.ones((1, 2)), np.ones((1, 2)), np.ones((1, 2))]
+        feedforward = [np.ones((1, 1)), np.ones((1, 1)), np.ones((1, 1))]
+        cost_come_mat = [np.ones((2, 2)), np.ones((2, 2)), np.ones((2, 2))]
+        cost_come_vec = [np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1))]
+        cost_go_mat = [np.ones((2, 2)), np.ones((2, 2)), np.ones((2, 2))]
+        cost_go_vec = [np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1))]
+
+        # expected outputs
+
+        # test function
+        assert 0, 'implement'
+        (x_hat, u_hat, feedback, feedforward, cost_come_mat,
+         cost_come_vec) = baseELQR.forard_pass(self, x_hat, feedback,
+                                               feedforward, cost_come_mat,
+                                               cost_come_vec, cost_go_mat,
+                                               cost_go_vec,
+                                               dynamics=func_list,
+                                               inverse_dynamics=func_list)
+
+        # checking
         assert 0, 'implement'
 
-    def test_backward_pass(self):
+    def test_backward_pass(self, func_list):
         assert 0, 'implement'
