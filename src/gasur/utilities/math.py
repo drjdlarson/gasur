@@ -17,9 +17,7 @@ def get_state_jacobian(x, u, fncs, **kwargs):
             x_r = x.copy()
             x_l = x.copy()
             x_r[col] += step_size
-#            assert 0, x_r
             x_l[col] -= step_size
-#            assert 0, (x_r, x_l)
             A[row, col] = inv_step2 * (fncs[row](x_r, u, **kwargs)
                                        - fncs[row](x_l, u, **kwargs))
     return A
