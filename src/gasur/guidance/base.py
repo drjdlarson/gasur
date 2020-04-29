@@ -204,7 +204,7 @@ class BaseELQR(BaseLQR):
         inv_dynamics_fncs = kwargs['inverse_dynamics']
 
         max_time_steps = len(cost_come_mat)
-        for kk in range(max_time_steps - 1, -1, -1):
+        for kk in range(max_time_steps - 2, -1, -1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
             x_hat_prime = np.zeros(x_hat.shape)
             for ii, gg in enumerate(inv_dynamics_fncs):
@@ -220,8 +220,8 @@ class BaseELQR(BaseLQR):
                                                  timestep=kk, **kwargs)
 
             (cost_go_mat[kk], cost_go_vec[kk], feedback[kk],
-             feedforward[kk]) = self.cost_to_go(cost_come_mat[kk+1],
-                                                cost_come_vec[kk+1],
+             feedforward[kk]) = self.cost_to_go(cost_go_mat[kk+1],
+                                                cost_go_vec[kk+1],
                                                 P, Q, R, q, r, state_mat,
                                                 input_mat, c_vec)
 

@@ -211,5 +211,68 @@ class TestBaseELQR:
         for ii in range(0, len(exp_cost_come_vec)):
             test.assert_allclose(cost_come_vec[ii], exp_cost_come_vec[ii])
 
-    def test_backward_pass(self, func_list):
-        assert 0, 'implement'
+    def test_backward_pass(self, Q, R, func_list, inv_func_list):
+        # Inputs
+        baseELQR = BaseELQR(Q=Q, R=R)
+        x_hat = np.arange(0, 2).reshape((2, 1))
+        x_start = x_hat.copy()
+        u_nom = np.array([[1]])
+        feedback = [np.ones((1, 2)), np.ones((1, 2)), np.ones((1, 2))]
+        feedforward = [np.ones((1, 1)), np.ones((1, 1)), np.ones((1, 1))]
+        cost_come_mat = [np.ones((2, 2)), np.ones((2, 2)), np.ones((2, 2))]
+        cost_come_vec = [np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1))]
+        cost_go_mat = [np.ones((2, 2)), np.ones((2, 2)), np.ones((2, 2))]
+        cost_go_vec = [np.ones((2, 1)), np.ones((2, 1)), np.ones((2, 1))]
+
+        # Expected Values
+        exp_x_hat = np.array([[1.14834458419351],
+                              [-2.14621103302943]])
+        exp_u_hat = np.array([[-0.00172699202296389]])
+
+        fb1 = np.array([[-0.847207594209788, -0.014217870424957]])
+        fb2 = np.array([[0.293040293386971, -0.131868131182320]])
+        fb3 = np.array([[1, 1]])
+        exp_feedback = [fb1, fb2, fb3]
+
+        ff1 = np.array([[1.945874951749496]])
+        ff2 = np.array([[3.849816845062269]])
+        ff3 = np.array([[1]])
+        exp_feedfor = [ff1, ff2, ff3]
+
+        cgm1 = np.array([[0.816130428667278, 0.013695256827117],
+                         [0.013695256827117, 0.001419152006663]])
+        cgm2 = np.array([[0.009682675370057, -0.003907203891583],
+                         [-0.003907203891583, 0.002758241739988]])
+        cgm3 = np.array([[1, 1],
+                         [1, 1]])
+        exp_cost_go_mat = [cgm1, cgm2, cgm3]
+
+        cgv1 = np.array([[-0.909939597617146],
+                         [-0.014814625476393]])
+        cgv2 = np.array([[0.084439017733033],
+                         [-0.037997557737296]])
+        cgv3 = np.array([[1],
+                         [1]])
+        exp_cost_go_vec = [cgv1, cgv2, cgv3]
+
+        # Test Function
+        (x_hat, u_hat, feedback, feedforward, cost_come_mat,
+         cost_come_vec) = baseELQR.backward_pass(x_hat, feedback,
+                                                 feedforward, cost_come_mat,
+                                                 cost_come_vec, cost_go_mat,
+                                                 cost_go_vec,
+                                                 dynamics=func_list,
+                                                 inverse_dynamics=inv_func_list,
+                                                 x_start=x_start, u_nom=u_nom)
+
+        # checking
+        test.assert_allclose(x_hat, exp_x_hat)
+        test.assert_allclose(u_hat, exp_u_hat)
+        for ii in range(0, len(exp_feedback)):
+            test.assert_allclose(feedback[ii], exp_feedback[ii])
+        for ii in range(0, len(exp_feedfor)):
+            test.assert_allclose(feedforward[ii], exp_feedfor[ii])
+        for ii in range(0, len(exp_cost_go_mat)):
+            test.assert_allclose(cost_go_mat[ii], exp_cost_go_mat[ii])
+        for ii in range(0, len(exp_cost_go_vec)):
+            test.assert_allclose(cost_go_vec[ii], exp_cost_go_vec[ii])
