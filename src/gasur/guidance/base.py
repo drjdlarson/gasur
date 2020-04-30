@@ -8,7 +8,7 @@ import numpy as np
 import scipy.linalg as la
 from scipy.stats import multivariate_normal as mvnpdf
 
-#from ..estimator import GaussianMixture
+from ..estimator import GaussianMixture
 from gasur.utilities.math import get_state_jacobian, get_input_jacobian
 
 
@@ -267,7 +267,7 @@ class BaseELQR(BaseLQR):
         return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
                 cost_come_vec)
 
-'''
+
 class DensityBased:
     def __init__(self, wayareas=[], saftey_factor=1, y_ref=0.9):
         self.targets = wayareas
@@ -439,14 +439,13 @@ class DensityBased:
         new_waypoints = kwargs[key]
         del kwargs[key]
         reset = kwargs.get('reset', False)
-        if reset:
-            self.wayareas = self.convert_waypoints(new_waypoints)
-        else:
-            new_areas = self.convert_waypoints(new_waypoints)
-            for ii in range(0, len(new_areas.means)):
-                self.wayareas.means.append(new_areas.means[ii])
-                self.wayareas.covariances.append(new_areas.covariances[ii])
-                self.wayareas.weights.append(new_areas.weights[ii])
+        if not reset:
+            for m in self.wayareas.means:
+                new_waypoints.append(m)
+
+        # clear way areas and add new ones
+        self.wayareas = GaussianMixture()
+        self.wayareas = self.convert_waypoints(new_waypoints)
 
     def target_center(self):
         summed = np.zeros(self.targets.means[0].shape)
@@ -454,4 +453,24 @@ class DensityBased:
         for ii in range(0, num_tars):
             summed += self.targets.means[ii]
         return summed / num_tars
-'''
+
+
+class GaussianObject:
+    def __init__(self, **kwargs):
+        self.dyn_functions = kwargs.get('dyn_functions', [])
+        self.inv_dyn_functions = kwargs.get('inv_dyn_functions', [])
+
+        # each timestep is a row
+        self.means = kwargs.get('means', np.array([[]]))
+        self.ctrl_input = kwargs('control_input', np.array([[]]))
+
+        # lists of arrays
+        self.feedforward_lst = kwargs.get('feedforward', [])
+        self.feedback_lst = kwargs.get('feedback', [])
+        self.cost_to_come_mat = kwargs.get('cost_to_come_mat', [])
+        self.cost_to_come_vec = kwargs.get('cost_to_come_vec', [])
+        self.cost_to_go_mat = kwargs.get('cost_to_go_mat', [])
+        self.cost-to_go_vec = kwargs.get('cost_go_vec', [])
+
+        # only 1 covariance for entire trajectory
+        self.covariance = kwargs.get('covariance', np.array([[]]))
