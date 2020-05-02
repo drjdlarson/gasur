@@ -7,9 +7,10 @@ Created on Sun Apr 19 10:22:52 2020
 import numpy as np
 import scipy.linalg as la
 
-from ..estimator import GaussianMixture
+from gasur.estimator import GaussianMixture
 from gasur.guidance.base import BaseELQR, DensityBased
-from gasur.utilities.math import get_state_jacobian, get_input_jacobian
+from gasur.utilities.math import get_state_jacobian, get_input_jacobian, \
+    get_hessian, get_jacobian
 
 
 class ELQRGuassian(BaseELQR, DensityBased):
@@ -115,8 +116,30 @@ class ELQRGuassian(BaseELQR, DensityBased):
                                      @ (gg.cost_go_vec[kk+1]
                                         + gg.cost_come_vec[kk+1])).T
 
+    def quadratize_non_quad_state(self, all_states, obj_num, **kwargs):
+        def hess_helper(x, **kwargs):
+            pass
+
+        def jac_helper(x, cur_states):
+            loc_states = cur_states.copy()
+            loc_states[:, [obj_num]] = x
+            weight_lst = []
+            cov_lst = []
+            for ii in self.gaussians:
+                weight_lst.append(ii.weight)
+                cov_lst.append(ii.covariance)
+            return self.density_based_cost(loc_states, weight_lst, cov_lst)
+
+        Q = get_hessian(all_states[:, [obj_num]].copy(),
+                        lambda x_: hess_helper(x_, all_states), **kwargs)
+        q = get_jacobian(all_states[:, [obj_num]].copy(),
+                         lambda x_: jac_helper(x_, all_states), **kwargs)
+        return Q, q
+
+
     def iterate(self, **kwargs):
         # ##TODO: implement
         msg = '{}.{} not implemented'.format(self.__class__.__name__,
                                              self.iterate.__name__)
         raise RuntimeError(msg)
+

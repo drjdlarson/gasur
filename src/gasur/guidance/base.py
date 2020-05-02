@@ -8,7 +8,7 @@ import numpy as np
 import scipy.linalg as la
 from scipy.stats import multivariate_normal as mvnpdf
 
-from ..estimator import GaussianMixture
+from gasur.estimator import GaussianMixture
 from gasur.utilities.math import get_state_jacobian, get_input_jacobian
 
 
@@ -274,17 +274,7 @@ class DensityBased:
         self.saftey_factor = saftey_factor
         self.y_ref = y_ref
 
-    def density_based_cost(self, **kwargs):
-        key = 'obj_weights'
-        obj_weights = kwargs[key]
-        del kwargs[key]
-        key = 'obj_states'
-        obj_states = kwargs[key]
-        del kwargs[key]
-        key = 'obj_covariances'
-        obj_covariances = kwargs[key]
-        del kwargs[key]
-
+    def density_based_cost(self, obj_states, obj_weights, obj_covariances):
         target_center = self.target_center()
         num_targets = len(self.targets.means)
         num_objects = obj_states.shape[1]
@@ -462,7 +452,7 @@ class GaussianObject:
 
         # each timestep is a row
         self.means = kwargs.get('means', np.array([[]]))
-        self.ctrl_input = kwargs('control_input', np.array([[]]))
+        self.ctrl_inputs = kwargs('control_input', np.array([[]]))
 
         # lists of arrays
         self.feedforward_lst = kwargs.get('feedforward', [])
@@ -470,7 +460,8 @@ class GaussianObject:
         self.cost_to_come_mat = kwargs.get('cost_to_come_mat', [])
         self.cost_to_come_vec = kwargs.get('cost_to_come_vec', [])
         self.cost_to_go_mat = kwargs.get('cost_to_go_mat', [])
-        self.cost-to_go_vec = kwargs.get('cost_go_vec', [])
+        self.cost_to_go_vec = kwargs.get('cost_go_vec', [])
 
-        # only 1 covariance for entire trajectory
+        # only 1 for entire trajectory
         self.covariance = kwargs.get('covariance', np.array([[]]))
+        self.weight = kwargs.get('weight', 0)
