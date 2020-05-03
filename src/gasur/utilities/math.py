@@ -24,6 +24,34 @@ def get_jacobian(x, fnc, **kwargs):
     return J
 
 
+def get_hessian(x, fnc, **kwargs):
+    step_size = np.finfo(float).eps**(1/4)
+    den = 1 / (4 * step_size**2)
+    n_vars = x.size
+    H = np.zeros((n_vars, n_vars))
+    for ii in range(0, n_vars):
+        for jj in range(0, n_vars):
+            x_ip_jp = x.copy()
+            x_ip_jp[ii] += step_size
+            x_ip_jp[jj] += step_size
+
+            x_ip_jm = x.copy()
+            x_ip_jm[ii] += step_size
+            x_ip_jm[jj] -= step_size
+
+            x_im_jm = x.copy()
+            x_im_jm[ii] -= step_size
+            x_im_jm[jj] -= step_size
+
+            x_im_jp = x.copy()
+            x_im_jp[ii] -= step_size
+            x_im_jp[jj] += step_size
+
+            H[ii, jj] = (fnc(x_ip_jp) - fnc(x_ip_jm) - fnc(x_im_jp)
+                         + fnc(x_im_jm)) * den
+    return 0.5 * (H + H.T)
+
+
 def get_state_jacobian(x, u, fncs, **kwargs):
     n_states = x.size
     A = np.zeros((n_states, n_states))
