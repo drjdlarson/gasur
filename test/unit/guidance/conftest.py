@@ -44,7 +44,7 @@ def inv_func_list():
 
 @pytest.fixture(scope="session")
 def wayareas():
-    means = waypoint_helper()
+    means = waypoint_helper().copy()
 
     c1 = np.zeros((4, 4))
     c1[0, 0] = 38
@@ -67,7 +67,7 @@ def wayareas():
 
 @pytest.fixture(scope="session")
 def waypoints():
-    return waypoint_helper()
+    return waypoint_helper().copy()
 
 
 def waypoint_helper():

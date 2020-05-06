@@ -6,7 +6,7 @@ Created on Fri Feb 28 11:18:28 2020
 """
 import numpy as np
 import scipy.linalg as la
-from scipy.stats import multivariate_normal as mvnpdf
+from scipy.stats import multivariate_normal as mvn
 
 from gasur.estimator import GaussianMixture
 from gasur.utilities.math import get_state_jacobian, get_input_jacobian
@@ -269,7 +269,9 @@ class BaseELQR(BaseLQR):
 
 
 class DensityBased:
-    def __init__(self, wayareas=GaussianMixture(), safety_factor=1, y_ref=0.9):
+    def __init__(self, wayareas=None, safety_factor=1, y_ref=0.9):
+        if wayareas is None:
+            wayareas = GaussianMixture()
         self.targets = wayareas
         self.safety_factor = safety_factor
         self.y_ref = y_ref
@@ -278,33 +280,32 @@ class DensityBased:
         target_center = self.target_center()
         num_targets = len(self.targets.means)
         num_objects = obj_states.shape[1]
+        num_states = obj_states.shape[0]
 
         # find radius of influence and shift
         max_dist = 0
         for tar_mean in self.targets.means:
             diff = tar_mean - target_center
-            dist = np.sqrt(diff.transpose() @ diff)
+            dist = np.sqrt(diff.T @ diff).squeeze()
             if dist > max_dist:
                 max_dist = dist
         radius_of_influence = self.safety_factor * max_dist
-        shift = -1 * np.log(1/self.y_ref - radius_of_influence)
+        shift = radius_of_influence + np.log(1/self.y_ref - 1)
 
         # get actiavation term
         max_dist = 0
         for ii in range(0, num_objects):
             diff = target_center - obj_states[:, [ii]]
-            dist = np.sqrt(diff.transpose @ diff)
+            dist = np.sqrt(diff.T @ diff).squeeze()
             if dist > max_dist:
                 max_dist = dist
-        activator = 1 / (1 + np.exp(-max_dist - shift))
+        activator = 1 / (1 + np.exp(-(max_dist - shift)))
 
-        # get maximum stand
-        max_var_obj = np.max(np.diag(obj_covariances))
-        max_var_target = 0
-        for cov in self.targets.covariances:
-            var = np.max(np.diag(cov))
-            if var > max_var_target:
-                max_var_target = var
+        # get maximum variance
+        max_var_obj = max(map(lambda x: float(np.max(np.diag(x))),
+                              obj_covariances))
+        max_var_target = max(map(lambda x: float(np.max(np.diag(x))),
+                                 self.targets.covariances))
 
         # Loop for all double summation terms
         sum_obj_obj = 0
@@ -318,9 +319,9 @@ class DensityBased:
                             + obj_covariances[inner_obj]
                 sum_obj_obj += obj_weights[outer_obj] \
                     * obj_weights[inner_obj] \
-                    * mvnpdf.pdf(obj_states[outer_obj],
-                                 mean=obj_states[inner_obj],
-                                 covariance=comb_cov)
+                    * mvn.pdf(obj_states[:, outer_obj],
+                              mean=obj_states[:, inner_obj],
+                              cov=comb_cov)
 
             # object to target and quadratic
             for ii in range(0, num_targets):
@@ -329,17 +330,17 @@ class DensityBased:
                     + self.targets.covariances[ii]
                 sum_obj_target += obj_weights[outer_obj] \
                     * self.targets.weights[ii] \
-                    * mvnpdf.pdf(obj_states[outer_obj],
-                                 mean=self.targets.means[ii],
-                                 covariance=comb_cov)
+                    * mvn.pdf(obj_states[:, outer_obj],
+                              mean=self.targets.means[ii].squeeze(),
+                              cov=comb_cov)
 
                 # quadratic
-                diff = obj_states[outer_obj] - self.targets.means[ii]
-                log_term = np.log((2*np.pi)**(-0.5*num_targets) *
-                                  la.det(comb_cov)**-0.5) \
-                    - 0.5 * diff.transpose() @ la.inv(comb_cov) @ diff
-                quad += obj_weights[outer_obj] * self.targets.weights[ii] \
-                    * log_term
+                diff = obj_states[:, [outer_obj]] - self.targets.means[ii]
+                log_term = np.log((2*np.pi)**(-0.5*num_states)
+                                  * la.det(comb_cov)**-0.5) \
+                    - 0.5 * diff.T @ la.inv(comb_cov) @ diff
+                quad += (obj_weights[outer_obj] * self.targets.weights[ii]
+                         * log_term).squeeze()
 
         # target to target
         for outer in range(0, num_targets):
@@ -348,11 +349,11 @@ class DensityBased:
                     + self.targets.covariances[inner]
                 sum_target_target += self.targets.weights[outer] \
                     * self.targets.weights[inner] \
-                    * mvnpdf.pdf(self.targets.means[outer],
-                                 mean=self.targets.means[inner],
-                                 covariance=comb_cov)
+                    * mvn.pdf(self.targets.means[outer].squeeze(),
+                              mean=self.targets.means[inner].squeeze(),
+                              cov=comb_cov)
 
-        return 10 * num_objects * max_var_obj * (sum_obj_obj - 20
+        return 10 * num_objects * max_var_obj * (sum_obj_obj - 2
                                                  * max_var_target * num_targets
                                                  * sum_obj_target) \
             + sum_target_target + activator * quad
@@ -423,22 +424,17 @@ class DensityBased:
             wayareas.weights.append(weight)
         return wayareas
 
-    def update_targets(self, **kwargs):
-        key = 'new_waypoints'
-        new_waypoints = kwargs[key]
-        del kwargs[key]
+    def update_targets(self, new_waypoints, **kwargs):
         reset = kwargs.get('reset', False)
         if not reset:
-            for m in self.wayareas.means:
+            for m in self.targets.means:
                 new_waypoints.append(m)
-
         # clear way areas and add new ones
-        self.wayareas = GaussianMixture()
-        self.wayareas = self.convert_waypoints(new_waypoints)
+        self.targets = GaussianMixture()
+        self.targets = self.convert_waypoints(new_waypoints)
 
     def target_center(self):
         summed = np.zeros(self.targets.means[0].shape)
-        assert self.targets.means
         num_tars = len(self.targets.means)
         for ii in range(0, num_tars):
             summed += self.targets.means[ii]

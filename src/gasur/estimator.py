@@ -16,9 +16,15 @@ import scipy
 
 
 class GaussianMixture:
-    def __init__(self, means=[], covariances=[], weights=[]):
+    def __init__(self, means=None, covariances=None, weights=None):
+        if means is None:
+            means = []
         self.means = means
+        if covariances is None:
+            covariances = []
         self.covariances = covariances
+        if weights is None:
+            weights = []
         self.weights = weights
 
 # %% General Estimator Class
