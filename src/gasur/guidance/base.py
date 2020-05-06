@@ -269,9 +269,9 @@ class BaseELQR(BaseLQR):
 
 
 class DensityBased:
-    def __init__(self, wayareas=[], saftey_factor=1, y_ref=0.9):
+    def __init__(self, wayareas=GaussianMixture(), safety_factor=1, y_ref=0.9):
         self.targets = wayareas
-        self.saftey_factor = saftey_factor
+        self.safety_factor = safety_factor
         self.y_ref = y_ref
 
     def density_based_cost(self, obj_states, obj_weights, obj_covariances):
@@ -286,7 +286,7 @@ class DensityBased:
             dist = np.sqrt(diff.transpose() @ diff)
             if dist > max_dist:
                 max_dist = dist
-        radius_of_influence = self.saftey_factor * max_dist
+        radius_of_influence = self.safety_factor * max_dist
         shift = -1 * np.log(1/self.y_ref - radius_of_influence)
 
         # get actiavation term
@@ -357,9 +357,7 @@ class DensityBased:
                                                  * sum_obj_target) \
             + sum_target_target + activator * quad
 
-    def convert_waypoints(self, **kwargs):
-        waypoints = kwargs['waypoints']
-        del kwargs['waypoints']
+    def convert_waypoints(self, waypoints):
         center_len = waypoints[0].size
         num_waypoints = len(waypoints)
         combined_centers = np.zeros((center_len, num_waypoints+1))
@@ -367,8 +365,9 @@ class DensityBased:
         # get overall center, build collection of centers
         for ii in range(0, num_waypoints):
             combined_centers[:, [ii]] = waypoints[ii].reshape((center_len, 1))
-            combined_centers[:, [-1]] += combined_centers[:, [ii]]
-        combined_centers[:, [-1]] = combined_centers[:, [-1]] / num_waypoints
+            combined_centers[:, [num_waypoints]] += combined_centers[:, [ii]]
+        combined_centers[:, [num_waypoints]] = combined_centers[:, [-1]] \
+            / num_waypoints
 
         # find directions to each point
         directions = np.zeros((center_len, num_waypoints + 1, num_waypoints
@@ -377,14 +376,13 @@ class DensityBased:
             for end_point in range(0, num_waypoints + 1):
                 directions[:, start_point, end_point] = \
                     (combined_centers[:, end_point]
-                     - combined_centers[:, start_point]).reshape(center_len, 1,
-                                                                 1)
+                     - combined_centers[:, start_point])
 
         def find_principal_components(data):
             num_samps = data.shape[0]
             num_feats = data.shape[1]
 
-            mean = np.sum(data, 1) / num_samps
+            mean = np.sum(data, 0) / num_samps
             covars = np.zeros((num_feats, num_feats))
             for ii in range(0, num_feats):
                 for jj in range(0, num_feats):
@@ -394,7 +392,8 @@ class DensityBased:
                                 * (data[samp, jj] - mean[jj])
                     covars[ii, jj] = acc / num_samps
             (w, comps) = la.eig(covars)
-            return comps.T()
+            inds = np.argsort(w)[::-1]
+            return comps[:, inds].T
 
         def find_largest_proj_dist(new_dirs, old_dirs):
             vals = np.zeros(new_dirs.shape[0])
@@ -410,7 +409,7 @@ class DensityBased:
         for wp_ind in range(0, num_waypoints):
             center = waypoints[wp_ind].reshape((center_len, 1))
 
-            sample_data = combined_centers
+            sample_data = combined_centers.copy()
             sample_data = np.delete(sample_data, wp_ind, 1)
             sample_dirs = directions[:, wp_ind, :].squeeze()
             sample_dirs = np.delete(sample_dirs, wp_ind, 1)
@@ -421,7 +420,7 @@ class DensityBased:
 
             wayareas.means.append(center)
             wayareas.covariances.append(covariance)
-            wayareas.weight.append(weight)
+            wayareas.weights.append(weight)
         return wayareas
 
     def update_targets(self, **kwargs):
@@ -439,6 +438,7 @@ class DensityBased:
 
     def target_center(self):
         summed = np.zeros(self.targets.means[0].shape)
+        assert self.targets.means
         num_tars = len(self.targets.means)
         for ii in range(0, num_tars):
             summed += self.targets.means[ii]

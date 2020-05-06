@@ -7,7 +7,6 @@ Created on Sun Apr 19 10:22:52 2020
 import numpy as np
 import scipy.linalg as la
 
-from gasur.estimator import GaussianMixture
 from gasur.guidance.base import BaseELQR, DensityBased
 from gasur.utilities.math import get_state_jacobian, get_input_jacobian, \
     get_hessian, get_jacobian
@@ -117,10 +116,7 @@ class ELQRGuassian(BaseELQR, DensityBased):
                                         + gg.cost_come_vec[kk+1])).T
 
     def quadratize_non_quad_state(self, all_states, obj_num, **kwargs):
-        def hess_helper(x, **kwargs):
-            pass
-
-        def jac_helper(x, cur_states):
+        def helper(x, cur_states):
             loc_states = cur_states.copy()
             loc_states[:, [obj_num]] = x
             weight_lst = []
@@ -131,15 +127,72 @@ class ELQRGuassian(BaseELQR, DensityBased):
             return self.density_based_cost(loc_states, weight_lst, cov_lst)
 
         Q = get_hessian(all_states[:, [obj_num]].copy(),
-                        lambda x_: hess_helper(x_, all_states), **kwargs)
+                        lambda x_: helper(x_, all_states), **kwargs)
         q = get_jacobian(all_states[:, [obj_num]].copy(),
-                         lambda x_: jac_helper(x_, all_states), **kwargs)
+                         lambda x_: helper(x_, all_states), **kwargs)
+
+        # Regularize Matrix
+        eig_vals, eig_vecs = la.eig(Q)
+        for ii in range(0, eig_vals.size):
+            if eig_vals[ii] < 0:
+                eig_vals[ii] = 0
+        Q = eig_vecs @ np.diag(eig_vals) @ la.inv(eig_vecs)
+
         return Q, q
 
+    def quadratize_cost(self, x_hat, u_hat, **kwargs):
+        # ##TODO: implement
+        msg = '{}.{} not implemented'.format(self.__class__.__name__,
+                                             self.quadratize_cost.__name__)
+        raise RuntimeError(msg)
 
     def iterate(self, **kwargs):
         # ##TODO: implement
         msg = '{}.{} not implemented'.format(self.__class__.__name__,
                                              self.iterate.__name__)
         raise RuntimeError(msg)
+        final_cost_function = kwargs['final_cost_function']
+        dynamics_fncs = kwargs['dynamics_fncs']
 
+        feedback, feedforward, cost_go_mat, cost_go_vec, cost_come_mat, \
+            cost_come_vec, x_hat = self.initialize(x_start, u_nom.size,
+                                                   **kwargs)
+
+        converged = False
+        old_cost = 0
+        for iteration in range(0, self.max_iters):
+            # forward pass
+            self.forard_pass(x_start=x_start, u_nom=u_nom, **kwargs)
+
+            # quadratize final cost
+            cost_go_mat[-1], cost_go_vec[-1] = \
+                self.quadratize_final_cost(x_hat, u_hat, x_end=x_end, **kwargs)
+            x_hat = -la.inv(cost_go_mat[-1] + cost_come_mat[-1]) \
+                @ (cost_go_vec[-1] + cost_come_vec[-1])
+
+            # backward pass
+            x_hat, u_hat, feedback, feedforward, cost_go_mat, \
+                cost_go_vec = self.backward_pass(x_hat, feedback, feedforward,
+                                                 cost_come_mat,
+                                                 cost_come_vec, cost_go_mat,
+                                                 cost_go_vec, x_start=x_start,
+                                                 u_nom=u_nom, **kwargs)
+
+            # find real cost of trajectory
+            state = x_hat
+            cur_cost = 0
+            for kk in range(0, len(feedback)-1):
+                ctrl_input = feedback[kk] @ state + feedforward[kk]
+                cur_cost += cost_function(state, ctrl_input, **kwargs)
+                state = dynamics_fncs(state, ctrl_input, **kwargs)
+            cur_cost += final_cost_function(state, **kwargs)
+
+            # check for convergence
+            if iteration != 0:
+                converged = np.abs(old_cost - cur_cost) < self.cost_tol
+
+            old_cost = cur_cost
+            if converged:
+                break
+
+        return feedback, feedforward

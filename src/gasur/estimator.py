@@ -16,7 +16,7 @@ import scipy
 
 
 class GaussianMixture:
-    def __init__(self, means, covariances, weights):
+    def __init__(self, means=[], covariances=[], weights=[]):
         self.means = means
         self.covariances = covariances
         self.weights = weights

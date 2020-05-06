@@ -8,18 +8,18 @@ import pytest
 import numpy as np
 import numpy.testing as test
 
-from gasur.guidance.base import BaseLQR, BaseELQR
+import gasur.guidance.base as base
 
 
 @pytest.mark.incremental
 class TestBaseLQR:
     def test_constructor(self, Q, R):
-        baseLQR = BaseLQR(Q=Q, R=R)
+        baseLQR = base.BaseLQR(Q=Q, R=R)
         test.assert_allclose(baseLQR.state_penalty, Q)
         test.assert_allclose(baseLQR.ctrl_penalty, R)
 
     def test_iterate(self, Q, R):
-        baseLQR = BaseLQR(Q=Q, R=R)
+        baseLQR = base.BaseLQR(Q=Q, R=R)
         F = np.array([[1, 0.5],
                       [0, 1]])
         G = np.array([[1],
@@ -32,19 +32,19 @@ class TestBaseLQR:
 @pytest.mark.incremental
 class TestBaseELQR:
     def test_constructor(self, Q, R):
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         test.assert_allclose(baseELQR.state_penalty, Q)
         test.assert_allclose(baseELQR.ctrl_penalty, R)
 
         mi = 20
-        baseELQR = BaseELQR(Q=Q, R=R, max_iters=mi)
+        baseELQR = base.BaseELQR(Q=Q, R=R, max_iters=mi)
         test.assert_allclose(baseELQR.state_penalty, Q)
         test.assert_allclose(baseELQR.ctrl_penalty, R)
 
         assert baseELQR.max_iters == mi
 
     def test_initialize(self, Q, R):
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         x_start = np.array([[0],
                            [1]])
         n_inputs = 1
@@ -60,7 +60,7 @@ class TestBaseELQR:
 
     def test_quadratize_cost(self, Q, R):
         # inputs
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         x_start = np.array([[1], [2]])
         x_hat = np.arange(0, 2).reshape((2, 1))
         u_hat = np.array([2]).reshape((1, 1))
@@ -85,7 +85,7 @@ class TestBaseELQR:
 
     def test_cost_to_go(self, Q, R):
         # inputs
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         cost_mat = np.eye(2)
         cost_vec = np.ones(2).reshape((2, 1))
         P = np.zeros((1, 2))
@@ -116,7 +116,7 @@ class TestBaseELQR:
 
     def test_cost_to_come(self, Q, R):
         # inputs
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         cost_mat = np.eye(2)
         cost_vec = np.ones(2).reshape((2, 1))
         P = np.zeros((1, 2))
@@ -147,7 +147,7 @@ class TestBaseELQR:
 
     def test_forward_pass(self, Q, R, func_list, inv_func_list):
         # inputs
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         x_hat = np.arange(0, 2).reshape((2, 1))
         x_start = x_hat.copy()
         u_nom = np.array([[1]])
@@ -213,7 +213,7 @@ class TestBaseELQR:
 
     def test_backward_pass(self, Q, R, func_list, inv_func_list):
         # Inputs
-        baseELQR = BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R)
         x_hat = np.arange(0, 2).reshape((2, 1))
         x_start = x_hat.copy()
         u_nom = np.array([[1]])
@@ -276,3 +276,48 @@ class TestBaseELQR:
             test.assert_allclose(cost_go_mat[ii], exp_cost_go_mat[ii])
         for ii in range(0, len(exp_cost_go_vec)):
             test.assert_allclose(cost_go_vec[ii], exp_cost_go_vec[ii])
+
+
+class TestDensityBased:
+    def test_constructor(self):
+        densityBased = base.DensityBased()
+        assert len(densityBased.targets.means) == 0
+
+        exp_safety_factor = 2
+        exp_y_ref = 0.8
+        densityBased = base.DensityBased(safety_factor=exp_safety_factor,
+                                         y_ref=exp_y_ref)
+        test.assert_allclose(densityBased.safety_factor, exp_safety_factor)
+        test.assert_allclose(densityBased.y_ref, exp_y_ref)
+
+    def test_target_center(self, wayareas):
+        densityBased = base.DensityBased(wayareas=wayareas)
+        exp_center = np.array([2, 0, 0, 0]).reshape((4, 1))
+
+        test.assert_allclose(densityBased.target_center(), exp_center)
+
+    def test_convert_waypoints(self, waypoints):
+        densityBased = base.DensityBased()
+
+        c1 = np.zeros((4, 4))
+        c1[0, 0] = 38.
+        c1[1, 1] = 15.
+        c2 = 4 * np.zeros((4, 4))
+        c2[0, 0] = 23.966312915412313
+        c2[0, 1] = 0.394911136156014
+        c2[1, 0] = 0.394911136156014
+        c2[1, 1] = 29.908409144106464
+        c3 = c1.copy()
+        c4 = c2.copy()
+        c4[0, 1] *= -1
+        c4[1, 0] *= -1
+        exp_covs = [c1, c2, c3, c4]
+
+        densityBased.convert_waypoints(waypoints)
+
+        for ii, cov in enumerate(densityBased.targets.covariances):
+            test.assert_allclose(cov, exp_covs[ii],
+                                 err_msg='iteration {}'.format(ii))
+
+    def test_update_targets(self):
+        assert 0, 'implement'
