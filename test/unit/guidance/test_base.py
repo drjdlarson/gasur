@@ -63,7 +63,6 @@ class TestBaseELQR:
         baseELQR = base.BaseELQR(Q=Q, R=R)
         x_start = np.array([[1], [2]])
         x_hat = np.arange(0, 2).reshape((2, 1))
-        u_hat = np.array([2]).reshape((1, 1))
         u_nom = np.array([[1]])
         t = 0
 
@@ -74,9 +73,8 @@ class TestBaseELQR:
         exp_r = np.array([-0.100000000000000]).reshape((1, 1))
 
         # test function
-        P, Q, R, q, r = baseELQR.quadratize_cost(x_hat, u_hat, timestep=t,
-                                                 x_start=x_start,
-                                                 u_nom=u_nom)
+        P, Q, R, q, r = baseELQR.quadratize_cost(x_start, u_nom, t,
+                                                 x_hat=x_hat)
 
         # check
         test.assert_allclose(P, exp_P)

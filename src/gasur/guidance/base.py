@@ -71,21 +71,18 @@ class BaseELQR(BaseLQR):
         return (feedback, feedforward, cost_go_mat, cost_go_vec,
                 cost_come_mat, cost_come_vec, x_hat)
 
-    def quadratize_cost(self, x_hat, u_hat, **kwargs):
+    def quadratize_cost(self, x_start, u_nom, timestep, **kwargs):
         '''
         This assumes the true cost function is given by:
             c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
             c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
             c_end = 1/2(x - x_end)^T Q (x - x_end)
         '''
-        timestep = kwargs['timestep']
-        x_start = kwargs['x_start']
-        u_nom = kwargs['u_nom']
         if timestep == 0:
             Q = self.state_penalty
             q = -Q @ x_start
         else:
-            Q, q = self.quadratize_non_quad_state(x_hat, u_hat, **kwargs)
+            Q, q = self.quadratize_non_quad_state(**kwargs)
 
         R = self.ctrl_penalty
         r = -R @ u_nom
@@ -93,7 +90,7 @@ class BaseELQR(BaseLQR):
 
         return P, Q, R, q, r
 
-    def quadratize_non_quad_state(self, x_hat, u_hat, **kwargs):
+    def quadratize_non_quad_state(self, x_hat=None, **kwargs):
         Q = self.state_penalty
         q = np.zeros((x_hat.size, 1))
         return Q, q
@@ -225,7 +222,7 @@ class BaseELQR(BaseLQR):
                                            dynamics_fncs, **kwargs)
             c_vec = x_hat - state_mat @ x_hat_prime - input_mat @ u_hat
 
-            P, Q, R, q, r = self.quadratize_cost(x_hat_prime, u_hat,
+            P, Q, R, q, r = self.quadratize_cost(x_hat=x_hat_prime,
                                                  timestep=kk, **kwargs)
 
             (cost_go_mat[kk], cost_go_vec[kk], feedback[kk],
@@ -260,7 +257,7 @@ class BaseELQR(BaseLQR):
             c_bar_vec = x_hat - state_mat_bar @ x_hat_prime \
                 - input_mat_bar @ u_hat
 
-            P, Q, R, q, r = self.quadratize_cost(x_hat, u_hat, timestep=kk,
+            P, Q, R, q, r = self.quadratize_cost(x_hat=x_hat, timestep=kk,
                                                  **kwargs)
 
             (cost_come_mat[kk+1], cost_come_vec[kk+1], feedback[kk],

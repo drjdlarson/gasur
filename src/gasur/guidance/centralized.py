@@ -117,10 +117,11 @@ class ELQRGaussian(BaseELQR, DensityBased):
                                      @ (gg.cost_go_vec[kk+1]
                                         + gg.cost_come_vec[kk+1])).T
 
-    def quadratize_non_quad_state(self, all_states, obj_num, **kwargs):
+    def quadratize_non_quad_state(self, all_states=None, obj_num=None,
+                                  **kwargs):
         def helper(x, cur_states):
             loc_states = cur_states.copy()
-            loc_states[:, [obj_num]] = x
+            loc_states[:, [obj_num]] = x.copy()
             weight_lst = []
             cov_lst = []
             for ii in self.gaussians:
@@ -130,8 +131,6 @@ class ELQRGaussian(BaseELQR, DensityBased):
 
         Q = get_hessian(all_states[:, [obj_num]].copy(),
                         lambda x_: helper(x_, all_states), **kwargs)
-        q = get_jacobian(all_states[:, [obj_num]].copy(),
-                         lambda x_: helper(x_, all_states), **kwargs)
 
         # Regularize Matrix
         eig_vals, eig_vecs = la.eig(Q)
@@ -140,28 +139,11 @@ class ELQRGaussian(BaseELQR, DensityBased):
                 eig_vals[ii] = 0
         Q = eig_vecs @ np.diag(eig_vals) @ la.inv(eig_vecs)
 
+        q = get_jacobian(all_states[:, [obj_num]].copy(),
+                         lambda x_: helper(x_, all_states), **kwargs)
+        q = q - Q @ all_states[:, [obj_num]]
+
         return Q, q
-
-    def quadratize_cost(self, all_states, obj_num, timestep, x_start, u_nom,
-                        **kwargs):
-        '''
-        This assumes the true cost function is given by:
-            c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
-            c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
-            c_end = 1/2(x - x_end)^T Q (x - x_end)
-        '''
-        if timestep == 0:
-            Q = self.state_penalty
-            q = -Q @ x_start
-        else:
-            Q, q = self.quadratize_non_quad_state(all_states, obj_num,
-                                                  **kwargs)
-
-        R = self.ctrl_penalty
-        r = -R @ u_nom
-        P = np.zeros((u_nom.size, x_start.size))
-
-        return P, Q, R, q, r
 
     def iterate(self, **kwargs):
         # ##TODO: implement
