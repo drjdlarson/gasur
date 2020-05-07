@@ -12,8 +12,10 @@ from gasur.utilities.math import get_state_jacobian, get_input_jacobian, \
     get_hessian, get_jacobian
 
 
-class ELQRGuassian(BaseELQR, DensityBased):
-    def __init__(self, cur_gaussians=[], **kwargs):
+class ELQRGaussian(BaseELQR, DensityBased):
+    def __init__(self, cur_gaussians=None, **kwargs):
+        if cur_gaussians is None:
+            cur_gaussians = []
         self.gaussians = cur_gaussians  # list of GaussianObjects
         super().__init__(**kwargs)
 
@@ -140,11 +142,26 @@ class ELQRGuassian(BaseELQR, DensityBased):
 
         return Q, q
 
-    def quadratize_cost(self, x_hat, u_hat, **kwargs):
-        # ##TODO: implement
-        msg = '{}.{} not implemented'.format(self.__class__.__name__,
-                                             self.quadratize_cost.__name__)
-        raise RuntimeError(msg)
+    def quadratize_cost(self, all_states, obj_num, timestep, x_start, u_nom,
+                        **kwargs):
+        '''
+        This assumes the true cost function is given by:
+            c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
+            c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
+            c_end = 1/2(x - x_end)^T Q (x - x_end)
+        '''
+        if timestep == 0:
+            Q = self.state_penalty
+            q = -Q @ x_start
+        else:
+            Q, q = self.quadratize_non_quad_state(all_states, obj_num,
+                                                  **kwargs)
+
+        R = self.ctrl_penalty
+        r = -R @ u_nom
+        P = np.zeros((u_nom.size, x_start.size))
+
+        return P, Q, R, q, r
 
     def iterate(self, **kwargs):
         # ##TODO: implement

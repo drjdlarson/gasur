@@ -76,3 +76,39 @@ def waypoint_helper():
     p3 = np.array([-15, 0, 0, 0]).reshape((4, 1))
     p4 = np.array([0, -15, 0, 0]).reshape((4, 1))
     return [p1, p2, p3, p4]
+
+
+@pytest.fixture(scope="session")
+def dyn_funcs():
+    def f1(x, u, **kwargs):
+        dt = kwargs['dt']
+        return x[0] + dt * x[2]
+
+    def f2(x, u, **kwargs):
+        dt = kwargs['dt']
+        return x[1] + dt * x[3]
+
+    def f3(x, u, **kwargs):
+        return x[2] + u[0]
+
+    def f4(x, u, **kwargs):
+        return x[3] + u[1]
+
+    return [f1, f2, f3, f4]
+
+
+@pytest.fixture(scope="session")
+def inv_dyn_funcs():
+    def f1(x, u, **kwargs):
+        dt = kwargs['dt']
+        return x[0] - dt * (x[2] - u[0])
+
+    def f2(x, u, **kwargs):
+        dt = kwargs['dt']
+        return x[1] - dt * (x[3] - u[1])
+
+    def f3(x, u, **kwargs):
+        return x[2] - u[0]
+
+    def f4(x, u, **kwargs):
+        return x[3] - u[1]

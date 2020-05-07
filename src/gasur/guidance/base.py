@@ -13,13 +13,22 @@ from gasur.utilities.math import get_state_jacobian, get_input_jacobian
 
 
 class BaseLQR:
-    def __init__(self, **kwargs):
-        self.state_penalty = kwargs['Q']
-        self.ctrl_penalty = kwargs['R']
-        def_rows = self.ctrl_penalty.shape[1]
-        def_cols = self.state_penalty.shape[0]
-        self.cross_penalty = kwargs.get('corss_penalty',
-                                        np.zeros((def_rows, def_cols)))
+    def __init__(self, Q=None, R=None, cross_penalty=None, **kwargs):
+        if Q is None:
+            Q = np.array([[]])
+        self.state_penalty = Q
+        if R is None:
+            R = np.array([[]])
+        self.ctrl_penalty = R
+        if cross_penalty is None:
+            def_rows = self.ctrl_penalty.shape[1]
+            if self.state_penalty.size > 0:
+                def_cols = self.state_penalty.shape[0]
+            else:
+                def_cols = 0
+            cross_penalty = np.zeros((def_rows, def_cols))
+        self.cross_penalty = cross_penalty
+        super().__init__(**kwargs)
 
     def iterate(self, **kwargs):
         # process input arguments
@@ -45,8 +54,8 @@ class BaseLQR:
 
 
 class BaseELQR(BaseLQR):
-    def __init__(self, **kwargs):
-        self.max_iters = kwargs.get('max_iters', 50)
+    def __init__(self, max_iters=50, **kwargs):
+        self.max_iters = max_iters
         super().__init__(**kwargs)
 
     def initialize(self, x_start, n_inputs, **kwargs):
@@ -269,12 +278,13 @@ class BaseELQR(BaseLQR):
 
 
 class DensityBased:
-    def __init__(self, wayareas=None, safety_factor=1, y_ref=0.9):
+    def __init__(self, wayareas=None, safety_factor=1, y_ref=0.9, **kwargs):
         if wayareas is None:
             wayareas = GaussianMixture()
         self.targets = wayareas
         self.safety_factor = safety_factor
         self.y_ref = y_ref
+        super().__init__(**kwargs)
 
     def density_based_cost(self, obj_states, obj_weights, obj_covariances):
         target_center = self.target_center()
@@ -448,7 +458,7 @@ class GaussianObject:
 
         # each timestep is a row
         self.means = kwargs.get('means', np.array([[]]))
-        self.ctrl_inputs = kwargs('control_input', np.array([[]]))
+        self.ctrl_inputs = kwargs.get('control_input', np.array([[]]))
 
         # lists of arrays
         self.feedforward_lst = kwargs.get('feedforward', [])
@@ -461,3 +471,6 @@ class GaussianObject:
         # only 1 for entire trajectory
         self.covariance = kwargs.get('covariance', np.array([[]]))
         self.weight = kwargs.get('weight', 0)
+
+    def time_horizon(self):
+        return self.means.shape[0]
