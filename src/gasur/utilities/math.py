@@ -20,7 +20,7 @@ def get_jacobian(x, fnc, **kwargs):
         x_l = x.copy()
         x_r[ii] += step_size
         x_l[ii] -= step_size
-        J[ii] = inv_step2 * (fnc(x_r) - fnc(x_l))
+        J[ii] = (fnc(x_r) - fnc(x_l)) * inv_step2
     return J
 
 

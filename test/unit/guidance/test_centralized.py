@@ -56,23 +56,23 @@ class TestELQRGaussian:
 #        assert 0, 'implement'
 
     def test_quadratize_non_quad_state(self, wayareas):
-        cur_states = np.array([[-6.61516208455517, 7.31118852531110,
+        cur_states = np.array([[-6.61516208446766, 7.31118852531110,
                                 -0.872274587078559],
-                               [0.120718435589312, 0.822267374847013,
+                               [0.120718435587983, 0.822267374847013,
                                 8.03032533284825],
-                               [-3.70905023923744, 0.109099775533068,
-                                0.869292134497581],
-                               [-0.673511914127673, 0.0704886302223785,
-                                1.37195762193361]])
+                               [-3.70905023905814, 0.109099775533068,
+                                0.869292134509202],
+                               [-0.673511914125811, 0.0704886302223785,
+                                1.37195762201929]])
         obj_num = 0
-        c1 = np.array([[0.159153553514662, -0.0131131393293015,
-                        0.0679982358692922, -0.00259902229574857],
-                       [-0.0131131393293015, 1.09141824323191,
-                        -0.00485217347554817, 0.242777767799848],
-                       [0.0679982358692923, -0.00485217347554816,
-                        0.0524826749134647, -0.00113766933711917],
-                       [-0.00259902229574857, 0.242777767799848,
-                        -0.00113766933711917, 0.182621583380717]])
+        c1 = np.array([[0.159153553514662, -0.013113139329301,
+                        0.067998235869292, -0.002599022295748],
+                       [-0.013113139329301, 1.091418243231293,
+                        -0.004852173475548, 0.242777767799711],
+                       [0.067998235869292, -0.004852173475548,
+                        0.052482674913465, -0.001137669337119],
+                       [-0.002599022295748, 0.242777767799711,
+                        -0.001137669337119, 0.182621583380687]])
         c2 = np.array([[0.168615126193114, 0.000427327257979604,
                         0.0813173846497561, 3.60271394071290e-05],
                        [0.000427327257979604, 1.63427398127019,
@@ -91,7 +91,7 @@ class TestELQRGaussian:
                         -0.00591837975207081, 0.206656002000548]])
         cov = [c1, c2, c3]
         cur_gaussians = []
-        weights = [0.326646270304980, 0.364094073944343, 0.309259655750677]
+        weights = [0.326646270305158, 0.364094073944246, 0.309259655750595]
         ctr1 = np.array([0.798419210129032, 0.803706982685878])
         ctr2 = np.array([0., 0.])
         ctr3 = np.array([-0.700669070490184, 1.52231152743820])
@@ -103,7 +103,10 @@ class TestELQRGaussian:
             gm.covariance = cov[ii]
             gm.weight = weights[ii]
             cur_gaussians.append(gm)
-            wayareas.weights = [0.5, 0.5, 0.5, 0.5]
+        for cov in wayareas.covariances:
+            cov[2, 2] = 100.
+            cov[3, 3] = 100.
+        wayareas.weights = [0.5, 0.5, 0.5, 0.5]
         elqrGaussian = guide.ELQRGaussian(cur_gaussians=cur_gaussians,
                                           wayareas=wayareas)
 
@@ -123,8 +126,8 @@ class TestELQRGaussian:
         Q, q = elqrGaussian.quadratize_non_quad_state(all_states=cur_states,
                                                       obj_num=obj_num)
 
-        test.assert_allclose(Q, exp_Q)
-        test.assert_allclose(q, exp_q, atol=1e-8)
+        test.assert_allclose(Q, exp_Q, atol=3e-8)
+        test.assert_allclose(q, exp_q, atol=3e-8)
 
     def test_quadratize_cost(self, wayareas):
         cur_states = np.array([[-6.61516208455517, 7.31118852531110,
@@ -174,7 +177,10 @@ class TestELQRGaussian:
             gm.covariance = cov[ii]
             gm.weight = weights[ii]
             cur_gaussians.append(gm)
-            wayareas.weights = [0.5, 0.5, 0.5, 0.5]
+        for cov in wayareas.covariances:
+            cov[2, 2] = 100.
+            cov[3, 3] = 100.
+        wayareas.weights = [0.5, 0.5, 0.5, 0.5]
         elqrGaussian = guide.ELQRGaussian(Q=np.eye(4), R=np.eye(2),
                                           cur_gaussians=cur_gaussians,
                                           wayareas=wayareas)

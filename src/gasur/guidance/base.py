@@ -344,7 +344,7 @@ class DensityBased:
                 # quadratic
                 diff = obj_states[:, [outer_obj]] - self.targets.means[ii]
                 log_term = np.log((2*np.pi)**(-0.5*num_states)
-                                  * la.det(comb_cov)**-0.5) \
+                                  / np.sqrt(la.det(comb_cov))) \
                     - 0.5 * diff.T @ la.inv(comb_cov) @ diff
                 quad += (obj_weights[outer_obj] * self.targets.weights[ii]
                          * log_term).squeeze()

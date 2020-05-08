@@ -42,7 +42,7 @@ def inv_func_list():
     return [f1, f2]
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def wayareas():
     means = waypoint_helper().copy()
 
@@ -65,7 +65,7 @@ def wayareas():
     return GaussianMixture(means, covs, weights)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def waypoints():
     return waypoint_helper().copy()
 
