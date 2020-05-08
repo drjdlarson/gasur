@@ -207,11 +207,5 @@ class TestELQRGaussian:
         test.assert_allclose(Q, exp_Q)
         test.assert_allclose(q, exp_q, atol=1e-8)
 
-    def test_forward_pass(self):
-        assert 0, 'implement'
-
-    def test_backward_pass(self):
-        assert 0, 'implement'
-
     def test_iterate(self):
         assert 0, 'implement'

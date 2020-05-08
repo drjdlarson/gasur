@@ -111,7 +111,7 @@ class BaseELQR(BaseLQR):
     def iterate(self, x_start, x_end, u_nom, **kwargs):
         cost_function = kwargs['cost_function']
         final_cost_function = kwargs['final_cost_function']
-        dynamics_fncs = kwargs['dynamics_fncs']
+        dyn_fncs = kwargs['dynamics_fncs']
 
         feedback, feedforward, cost_go_mat, cost_go_vec, cost_come_mat, \
             cost_come_vec, x_hat = self.initialize(x_start, u_nom.size,
@@ -119,14 +119,20 @@ class BaseELQR(BaseLQR):
 
         converged = False
         old_cost = 0
+        max_time_steps = len(cost_come_mat)
         for iteration in range(0, self.max_iters):
             # forward pass
-            x_hat, u_hat, feedback, feedforward, cost_come_mat, \
-                cost_come_vec = self.forard_pass(x_hat, feedback, feedforward,
-                                                 cost_come_mat,
-                                                 cost_come_vec, cost_go_mat,
-                                                 cost_go_vec, x_start=x_start,
-                                                 u_nom=u_nom, **kwargs)
+            for kk in range(0, max_time_steps - 1):
+                (x_hat, u_hat, feedback[kk], feedforward[kk],
+                 cost_come_mat[kk+1],
+                 cost_come_vec[kk+1]) = self.forard_pass(x_hat, feedback[kk],
+                                                         feedforward[kk],
+                                                         cost_come_mat[kk],
+                                                         cost_come_vec[kk],
+                                                         cost_go_mat[kk+1],
+                                                         cost_go_vec[kk+1],
+                                                         kk, x_start=x_start,
+                                                         u_nom=u_nom, **kwargs)
 
             # quadratize final cost
             cost_go_mat[-1], cost_go_vec[-1] = \
@@ -135,12 +141,16 @@ class BaseELQR(BaseLQR):
                 @ (cost_go_vec[-1] + cost_come_vec[-1])
 
             # backward pass
-            x_hat, u_hat, feedback, feedforward, cost_go_mat, \
-                cost_go_vec = self.backward_pass(x_hat, feedback, feedforward,
-                                                 cost_come_mat,
-                                                 cost_come_vec, cost_go_mat,
-                                                 cost_go_vec, x_start=x_start,
-                                                 u_nom=u_nom, **kwargs)
+            for kk in range(max_time_steps - 2, -1, -1):
+                x_hat, u_hat, feedback[kk], feedforward[kk], cost_go_mat[kk], \
+                    cost_go_vec[kk] = self.backward_pass(x_hat, feedback[kk],
+                                                         feedforward[kk],
+                                                         cost_come_mat[kk],
+                                                         cost_come_vec[kk],
+                                                         cost_go_mat[kk+1],
+                                                         cost_go_vec[kk+1],
+                                                         kk, x_start=x_start,
+                                                         u_nom=u_nom, **kwargs)
 
             # find real cost of trajectory
             state = x_hat
@@ -148,7 +158,7 @@ class BaseELQR(BaseLQR):
             for kk in range(0, len(feedback)-1):
                 ctrl_input = feedback[kk] @ state + feedforward[kk]
                 cur_cost += cost_function(state, ctrl_input, **kwargs)
-                state = dynamics_fncs(state, ctrl_input, **kwargs)
+                state = dyn_fncs(state, ctrl_input, **kwargs)
             cur_cost += final_cost_function(state, **kwargs)
 
             # check for convergence
@@ -203,75 +213,61 @@ class BaseELQR(BaseLQR):
 
         return cost_come_mat_out, cost_come_vec_out, feedback, feedforward
 
-    def backward_pass(self, x_hat, feedback, feedforward,
+    def backward_pass(self, x_hat, u_hat, feedback, feedforward,
                       cost_come_mat, cost_come_vec, cost_go_mat, cost_go_vec,
-                      **kwargs):
-        dynamics_fncs = kwargs['dynamics']
-        inv_dynamics_fncs = kwargs['inverse_dynamics']
+                      timestep, dyn_fncs, inv_dyn_fncs, **kwargs):
+        x_hat_prime = np.zeros(x_hat.shape)
+        for ii, gg in enumerate(inv_dyn_fncs):
+            x_hat_prime[ii] = gg(x_hat, u_hat, **kwargs)
 
-        max_time_steps = len(cost_come_mat)
-        for kk in range(max_time_steps - 2, -1, -1):
-            u_hat = feedback[kk] @ x_hat + feedforward[kk]
-            x_hat_prime = np.zeros(x_hat.shape)
-            for ii, gg in enumerate(inv_dynamics_fncs):
-                x_hat_prime[ii] = gg(x_hat, u_hat, **kwargs)
+        state_mat = get_state_jacobian(x_hat_prime, u_hat,
+                                       dyn_fncs, **kwargs)
+        input_mat = get_input_jacobian(x_hat_prime, u_hat,
+                                       dyn_fncs, **kwargs)
+        c_vec = x_hat - state_mat @ x_hat_prime - input_mat @ u_hat
 
-            state_mat = get_state_jacobian(x_hat_prime, u_hat,
-                                           dynamics_fncs, **kwargs)
-            input_mat = get_input_jacobian(x_hat_prime, u_hat,
-                                           dynamics_fncs, **kwargs)
-            c_vec = x_hat - state_mat @ x_hat_prime - input_mat @ u_hat
+        P, Q, R, q, r = self.quadratize_cost(x_hat=x_hat_prime,
+                                             timestep=timestep, **kwargs)
 
-            P, Q, R, q, r = self.quadratize_cost(x_hat=x_hat_prime,
-                                                 timestep=kk, **kwargs)
+        (cost_go_mat_out, cost_go_vec_out, feedback,
+         feedforward) = self.cost_to_go(cost_go_mat, cost_go_vec, P, Q, R, q,
+                                        r, state_mat, input_mat, c_vec)
 
-            (cost_go_mat[kk], cost_go_vec[kk], feedback[kk],
-             feedforward[kk]) = self.cost_to_go(cost_go_mat[kk+1],
-                                                cost_go_vec[kk+1],
-                                                P, Q, R, q, r, state_mat,
-                                                input_mat, c_vec)
+        # update state estimate
+        x_hat = -la.inv(cost_go_mat_out + cost_come_mat) \
+            @ (cost_go_vec_out + cost_come_vec)
 
-            # update state estimate
-            x_hat = -la.inv(cost_go_mat[kk] + cost_come_mat[kk]) \
-                @ (cost_go_vec[kk] + cost_come_vec[kk])
+        return (x_hat, feedback, feedforward, cost_go_mat_out,
+                cost_go_vec_out)
 
-        return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
-                cost_come_vec)
+    def forard_pass(self, x_hat, u_hat, feedback, feedforward, cost_come_mat,
+                    cost_come_vec, cost_go_mat, cost_go_vec, timestep,
+                    dyn_fncs, inv_dyn_fncs, **kwargs):
+        x_hat_prime = np.zeros(x_hat.shape)
+        for ii, ff in enumerate(dyn_fncs):
+            x_hat_prime[ii] = ff(x_hat, u_hat, **kwargs)
 
-    def forard_pass(self, x_hat, feedback, feedforward, cost_come_mat,
-                    cost_come_vec, cost_go_mat, cost_go_vec, **kwargs):
-        dynamics_fncs = kwargs['dynamics']
-        inv_dynamics_fncs = kwargs['inverse_dynamics']
+        state_mat_bar = get_state_jacobian(x_hat_prime, u_hat,
+                                           inv_dyn_fncs, **kwargs)
+        input_mat_bar = get_input_jacobian(x_hat_prime, u_hat,
+                                           inv_dyn_fncs, **kwargs)
+        c_bar_vec = x_hat - state_mat_bar @ x_hat_prime \
+            - input_mat_bar @ u_hat
 
-        max_time_steps = len(cost_come_mat)
-        for kk in range(0, max_time_steps - 1):
-            u_hat = feedback[kk] @ x_hat + feedforward[kk]
-            x_hat_prime = np.zeros(x_hat.shape)
-            for ii, ff in enumerate(dynamics_fncs):
-                x_hat_prime[ii] = ff(x_hat, u_hat, **kwargs)
+        P, Q, R, q, r = self.quadratize_cost(x_hat=x_hat, timestep=timestep,
+                                             **kwargs)
 
-            state_mat_bar = get_state_jacobian(x_hat_prime, u_hat,
-                                               inv_dynamics_fncs, **kwargs)
-            input_mat_bar = get_input_jacobian(x_hat_prime, u_hat,
-                                               inv_dynamics_fncs, **kwargs)
-            c_bar_vec = x_hat - state_mat_bar @ x_hat_prime \
-                - input_mat_bar @ u_hat
+        (cost_come_mat_out, cost_come_vec_out, feedback,
+         feedforward) = self.cost_to_come(cost_come_mat, cost_come_vec,
+                                          P, Q, R, q, r, state_mat_bar,
+                                          input_mat_bar, c_bar_vec)
 
-            P, Q, R, q, r = self.quadratize_cost(x_hat=x_hat, timestep=kk,
-                                                 **kwargs)
+        # update state estimate
+        x_hat = -la.inv(cost_go_mat + cost_come_mat_out) \
+            @ (cost_go_vec + cost_come_vec_out)
 
-            (cost_come_mat[kk+1], cost_come_vec[kk+1], feedback[kk],
-             feedforward[kk]) = self.cost_to_come(cost_come_mat[kk],
-                                                  cost_come_vec[kk],
-                                                  P, Q, R, q, r, state_mat_bar,
-                                                  input_mat_bar, c_bar_vec)
-
-            # update state estimate
-            x_hat = -la.inv(cost_go_mat[kk+1] + cost_come_mat[kk+1]) \
-                @ (cost_go_vec[kk+1] + cost_come_vec[kk+1])
-
-        return (x_hat, u_hat, feedback, feedforward, cost_come_mat,
-                cost_come_vec)
+        return (x_hat, feedback, feedforward, cost_come_mat_out,
+                cost_come_vec_out)
 
 
 class DensityBased:
@@ -468,6 +464,7 @@ class GaussianObject:
         # only 1 for entire trajectory
         self.covariance = kwargs.get('covariance', np.array([[]]))
         self.weight = kwargs.get('weight', 0)
+        self.ctrl_nom = kwargs.get('ctrl_nom', np.array([[]]))
 
     def time_horizon(self):
         return self.means.shape[0]

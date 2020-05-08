@@ -19,6 +19,14 @@ class ELQRGaussian(BaseELQR, DensityBased):
         self.gaussians = cur_gaussians  # list of GaussianObjects
         super().__init__(**kwargs)
 
+    def initialize(self, measured_gaussians):
+        # ##TODO: implement
+        msg = '{}.{} not implemented'.format(self.__class__.__name__,
+                                             self.iterate.__name__)
+        raise RuntimeError(msg)
+        # Inputs: GaussianMixture object of observations
+        # for each observation, find the best fit above criteria
+
     def fowrward_pass(self, **kwargs):
         max_time_steps = self.gaussians.means.shape[0]
         num_gaussians = len(self.gaussians)
@@ -145,45 +153,131 @@ class ELQRGaussian(BaseELQR, DensityBased):
 
         return Q, q
 
-    def iterate(self, **kwargs):
-        # ##TODO: implement
-        msg = '{}.{} not implemented'.format(self.__class__.__name__,
-                                             self.iterate.__name__)
-        raise RuntimeError(msg)
+    def iterate(self, measured_gaussians, **kwargs):
+        cost_function = kwargs['cost_function']
         final_cost_function = kwargs['final_cost_function']
-        dynamics_fncs = kwargs['dynamics_fncs']
 
-        feedback, feedforward, cost_go_mat, cost_go_vec, cost_come_mat, \
-            cost_come_vec, x_hat = self.initialize(x_start, u_nom.size,
-                                                   **kwargs)
+        # ##TODO: fix this
+        self.initialize(measured_gaussians, **kwargs)
+        num_gaussians = len(self.gaussians)
+        if num_gaussians > 0:
+            max_time_steps = self.gaussians.means[0].shape[0]
+        else:
+            max_time_steps = 0
+        x_starts = np.zeros((num_gaussians, self.gaussians.means.shape[1]))
+        for ii, gg in enumerate(self.gaussians):
+            x_starts[ii, :] = gg.means[1, :]
 
         converged = False
         old_cost = 0
         for iteration in range(0, self.max_iters):
             # forward pass
-            self.forard_pass(x_start=x_start, u_nom=u_nom, **kwargs)
+            for kk in range(0, max_time_steps - 1):
+                cur_states = np.zeros((num_gaussians,
+                                       self.gaussians.means.shape[1]))
+                for ii, gg in enumerate(self.gaussians):
+                    cur_states[ii, :] = gg.means[kk, :]
+
+                # update control for each gaussian
+                for gg in self.gaussians:
+                    gg.ctrl_input[kk, :] = (gg.feedback[kk]
+                                            @ gg.means[[kk], :].T
+                                            + gg.feedforward[kk])
+
+                for ii, gg in enumerate(self.gaussians):
+                    x_hat = gg.means[[kk], :].T
+                    u_hat = gg.ctrl_input[[kk], :].T
+                    feedback = gg.feedback[kk]
+                    feedforward = gg.feedforward[kk]
+                    cost_come_mat = gg.cost_come_mat[kk]
+                    cost_come_vec = gg.cost_come_vec[kk]
+                    cost_go_mat = gg.cost_go_mat[kk+1]
+                    cost_go_vec = gg.cost_go_vec[kk+1]
+                    x_start = x_starts[[ii], :].T
+                    u_nom = gg.ctrl_nom
+                    f = gg.dyn_functions
+                    in_f = gg.inv_dyn_functions
+
+                    (x_hat, gg.feedback[kk], gg.feedforward[kk],
+                     gg.cost_come_mat[kk+1],
+                     gg.cost_come_vec[kk+1]) = self.forard_pass(x_hat, u_hat,
+                                                                feedback,
+                                                                feedforward,
+                                                                cost_come_mat,
+                                                                cost_come_vec,
+                                                                cost_go_mat,
+                                                                cost_go_vec,
+                                                                kk,
+                                                                x_start=x_start,
+                                                                u_nom=u_nom,
+                                                                dyn_fncs=f,
+                                                                inv_dyn_fncs=in_f,
+                                                                **kwargs)
+                    gg.means[[kk+1], :] = x_hat.T
 
             # quadratize final cost
+            # ##TODO: implement
+            msg = '{}.{} not implemented'.format(self.__class__.__name__,
+                                                 self.iterate.__name__)
+            raise RuntimeError(msg)
+            # ##TODO: fix this
             cost_go_mat[-1], cost_go_vec[-1] = \
                 self.quadratize_final_cost(x_hat, u_hat, x_end=x_end, **kwargs)
             x_hat = -la.inv(cost_go_mat[-1] + cost_come_mat[-1]) \
                 @ (cost_go_vec[-1] + cost_come_vec[-1])
 
             # backward pass
-            x_hat, u_hat, feedback, feedforward, cost_go_mat, \
-                cost_go_vec = self.backward_pass(x_hat, feedback, feedforward,
-                                                 cost_come_mat,
-                                                 cost_come_vec, cost_go_mat,
-                                                 cost_go_vec, x_start=x_start,
-                                                 u_nom=u_nom, **kwargs)
+            for kk in range(max_time_steps - 2, -1, -1):
+                prev_states = np.zeros((num_gaussians,
+                                       self.gaussians.means.shape[1]))
+                for ii, gg in enumerate(self.gaussians):
+                    gg.ctrl_input[kk, :] = (gg.feedback[kk]
+                                            @ gg.means[[kk+1], :].T
+                                            + gg.feedforward[kk])
+                    for jj, ff in enumerate(gg.inv_dyn_functions):
+                        prev_states[ii, jj] = ff(gg.means[kk+1, :],
+                                                 gg.ctrl_input[kk, :],
+                                                 **kwargs)
+
+                # update values
+                for ii, gg in enumerate(self.gaussians):
+                    x_hat = gg.means[[kk+1], :].T
+                    u_hat = gg.ctrl_input[[kk], :].T
+                    feedback = gg.feedback[kk]
+                    feedforward = gg.feedforward[kk]
+                    cost_come_mat = gg.cost_come_mat[kk]
+                    cost_come_vec = gg.cost_come_vec[kk]
+                    cost_go_mat = gg.cost_go_mat[kk+1]
+                    cost_go_vec = gg.cost_go_vec[kk+1]
+                    x_start = x_starts[[ii], :].T
+                    u_nom = gg.ctrl_nom
+                    f = gg.dyn_functions
+                    in_f = gg.inv_dyn_functions
+
+                    x_hat, feedback[kk], feedforward[kk], cost_go_mat[kk], \
+                        cost_go_vec[kk] = self.backward_pass(x_hat, u_hat,
+                                                             feedback[kk],
+                                                             feedforward[kk],
+                                                             cost_come_mat[kk],
+                                                             cost_come_vec[kk],
+                                                             cost_go_mat[kk+1],
+                                                             cost_go_vec[kk+1],
+                                                             kk,
+                                                             x_start=x_start,
+                                                             u_nom=u_nom,
+                                                             dyn_fncs=f,
+                                                             inv_dyn_fncs=in_f,
+                                                             **kwargs)
+                    gg.means[[kk], :] = x_hat.T
 
             # find real cost of trajectory
+            # ##TODO: fix this
             state = x_hat
             cur_cost = 0
             for kk in range(0, len(feedback)-1):
                 ctrl_input = feedback[kk] @ state + feedforward[kk]
                 cur_cost += cost_function(state, ctrl_input, **kwargs)
-                state = dynamics_fncs(state, ctrl_input, **kwargs)
+                state = dyn_fncs(state, ctrl_input, **kwargs)
             cur_cost += final_cost_function(state, **kwargs)
 
             # check for convergence

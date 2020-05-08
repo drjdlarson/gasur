@@ -159,7 +159,6 @@ class TestBaseELQR:
         # expected outputs
         exp_x_hat = np.array([[-4.01398428760128],
                               [3.00282660925714]])
-        exp_u_hat = np.array([[-0.000568845876679269]])
 
         fb1 = np.array([[-0.016913876239709, 0.253970455953737]])
         fb2 = np.array([[-0.542269168713002, -0.045531860887841]])
@@ -188,18 +187,27 @@ class TestBaseELQR:
         exp_cost_come_vec = [ccv1, ccv2, ccv3]
 
         # test function
-        (x_hat, u_hat, feedback, feedforward, cost_come_mat,
-         cost_come_vec) = baseELQR.forard_pass(x_hat, feedback,
-                                               feedforward, cost_come_mat,
-                                               cost_come_vec, cost_go_mat,
-                                               cost_go_vec,
-                                               dynamics=func_list,
-                                               inverse_dynamics=inv_func_list,
-                                               x_start=x_start, u_nom=u_nom)
+        max_time_steps = len(cost_come_mat)
+        # forward pass
+        for kk in range(0, max_time_steps - 1):
+            u_hat = feedback[kk] @ x_hat + feedforward[kk]
+            (x_hat, feedback[kk], feedforward[kk],
+             cost_come_mat[kk+1],
+             cost_come_vec[kk+1]) = baseELQR.forard_pass(x_hat, u_hat,
+                                                         feedback[kk],
+                                                         feedforward[kk],
+                                                         cost_come_mat[kk],
+                                                         cost_come_vec[kk],
+                                                         cost_go_mat[kk+1],
+                                                         cost_go_vec[kk+1],
+                                                         kk,
+                                                         dyn_fncs=func_list,
+                                                         inv_dyn_fncs=inv_func_list,
+                                                         x_start=x_start,
+                                                         u_nom=u_nom)
 
         # checking
         test.assert_allclose(x_hat, exp_x_hat)
-        test.assert_allclose(u_hat, exp_u_hat)
         for ii in range(0, len(exp_feedback)):
             test.assert_allclose(feedback[ii], exp_feedback[ii])
         for ii in range(0, len(exp_feedfor)):
@@ -254,18 +262,25 @@ class TestBaseELQR:
         exp_cost_go_vec = [cgv1, cgv2, cgv3]
 
         # Test Function
-        (x_hat, u_hat, feedback, feedforward, cost_come_mat,
-         cost_come_vec) = baseELQR.backward_pass(x_hat, feedback,
-                                                 feedforward, cost_come_mat,
-                                                 cost_come_vec, cost_go_mat,
-                                                 cost_go_vec,
-                                                 dynamics=func_list,
-                                                 inverse_dynamics=inv_func_list,
-                                                 x_start=x_start, u_nom=u_nom)
+        max_time_steps = len(cost_come_mat)
+        for kk in range(max_time_steps - 2, -1, -1):
+            u_hat = feedback[kk] @ x_hat + feedforward[kk]
+            (x_hat, feedback[kk], feedforward[kk], cost_go_mat[kk],
+             cost_go_vec[kk]) = baseELQR.backward_pass(x_hat, u_hat,
+                                                       feedback[kk],
+                                                       feedforward[kk],
+                                                       cost_come_mat[kk],
+                                                       cost_come_vec[kk],
+                                                       cost_go_mat[kk+1],
+                                                       cost_go_vec[kk+1],
+                                                       kk,
+                                                       dyn_fncs=func_list,
+                                                       inv_dyn_fncs=inv_func_list,
+                                                       x_start=x_start,
+                                                       u_nom=u_nom)
 
         # checking
         test.assert_allclose(x_hat, exp_x_hat)
-        test.assert_allclose(u_hat, exp_u_hat)
         for ii in range(0, len(exp_feedback)):
             test.assert_allclose(feedback[ii], exp_feedback[ii])
         for ii in range(0, len(exp_feedfor)):
