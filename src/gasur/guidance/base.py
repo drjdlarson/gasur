@@ -13,7 +13,8 @@ from gasur.utilities.math import get_state_jacobian, get_input_jacobian
 
 
 class BaseLQR:
-    def __init__(self, Q=None, R=None, cross_penalty=None, **kwargs):
+    def __init__(self, Q=None, R=None, cross_penalty=None, horizon_len=None,
+                 **kwargs):
         if Q is None:
             Q = np.array([[]])
         self.state_penalty = Q
@@ -28,6 +29,9 @@ class BaseLQR:
                 def_cols = 0
             cross_penalty = np.zeros((def_rows, def_cols))
         self.cross_penalty = cross_penalty
+        if horizon_len is None:
+            horizon_len = np.inf
+        self.horizon_len = horizon_len
         super().__init__(**kwargs)
 
     def iterate(self, **kwargs):
@@ -36,10 +40,8 @@ class BaseLQR:
         del kwargs['F']
         G = kwargs['G']
         del kwargs['G']
-        total_time_steps = kwargs.get('total_time_steps', None)
-        inf_horizon = total_time_steps is None
 
-        if inf_horizon:
+        if self.horizon_len == np.inf:
             P = la.solve_discrete_are(F, G, self.state_penalty,
                                       self.ctrl_penalty)
             feedback_gain = la.inv(G.T @ P @ G + self.ctrl_penalty) \
@@ -54,9 +56,11 @@ class BaseLQR:
 
 
 class BaseELQR(BaseLQR):
-    def __init__(self, max_iters=50, **kwargs):
+    def __init__(self, max_iters=50, horizon_len=3, **kwargs):
         self.max_iters = max_iters
-        super().__init__(**kwargs)
+        super().__init__(horizon_len=horizon_len, **kwargs)
+        if self.horizon_len == np.inf:
+            raise RuntimeError('Horizon must be finite for ELQR')
 
     def initialize(self, x_start, n_inputs, **kwargs):
         n_states = x_start.size
@@ -110,7 +114,6 @@ class BaseELQR(BaseLQR):
 
     def iterate(self, x_start, x_end, u_nom, **kwargs):
         cost_function = kwargs['cost_function']
-        final_cost_function = kwargs['final_cost_function']
         dyn_fncs = kwargs['dynamics_fncs']
 
         feedback, feedforward, cost_go_mat, cost_go_vec, cost_come_mat, \
@@ -119,10 +122,9 @@ class BaseELQR(BaseLQR):
 
         converged = False
         old_cost = 0
-        max_time_steps = len(cost_come_mat)
         for iteration in range(0, self.max_iters):
             # forward pass
-            for kk in range(0, max_time_steps - 1):
+            for kk in range(0, self.horizon_len - 1):
                 (x_hat, u_hat, feedback[kk], feedforward[kk],
                  cost_come_mat[kk+1],
                  cost_come_vec[kk+1]) = self.forard_pass(x_hat, feedback[kk],
@@ -141,7 +143,7 @@ class BaseELQR(BaseLQR):
                 @ (cost_go_vec[-1] + cost_come_vec[-1])
 
             # backward pass
-            for kk in range(max_time_steps - 2, -1, -1):
+            for kk in range(self.horizon_len - 2, -1, -1):
                 x_hat, u_hat, feedback[kk], feedforward[kk], cost_go_mat[kk], \
                     cost_go_vec[kk] = self.backward_pass(x_hat, feedback[kk],
                                                          feedforward[kk],
@@ -155,11 +157,11 @@ class BaseELQR(BaseLQR):
             # find real cost of trajectory
             state = x_hat
             cur_cost = 0
-            for kk in range(0, len(feedback)-1):
+            for kk in range(0, self.horizon_len-1):
                 ctrl_input = feedback[kk] @ state + feedforward[kk]
                 cur_cost += cost_function(state, ctrl_input, **kwargs)
                 state = dyn_fncs(state, ctrl_input, **kwargs)
-            cur_cost += final_cost_function(state, **kwargs)
+            cur_cost += self.final_cost_function(state, x_end)
 
             # check for convergence
             if iteration != 0:
@@ -170,6 +172,19 @@ class BaseELQR(BaseLQR):
                 break
 
         return feedback, feedforward
+
+    def final_cost_function(self, state, goal, **kwargs):
+        if state.ndim != 2:
+            state = state.reshape((state.size, 1))
+        if goal.ndim != 2:
+            goal = goal.reshape((goal.size, 1))
+        if goal.shape[0] != state.shape[0]:
+            msg = 'State ({}) and goal ({}) '.format(state.shape[0],
+                                                     goal.shape[0]) \
+                + 'do not have the same dimension'.format()
+            raise RuntimeError(msg)
+        diff = state - goal
+        return (diff.T @ self.state_penalty @ diff).squeeze()
 
     def cost_to_go(self, cost_go_mat, cost_go_vec, P, Q, R, q, r,
                    state_mat, input_mat, c_vec, **kwargs):

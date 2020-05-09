@@ -43,6 +43,9 @@ class TestBaseELQR:
 
         assert baseELQR.max_iters == mi
 
+        with pytest.raises(RuntimeError, match=r"Horizon .* ELQR"):
+            baseELQR = base.BaseELQR(horizon_len=np.inf)
+
     def test_initialize(self, Q, R):
         baseELQR = base.BaseELQR(Q=Q, R=R)
         x_start = np.array([[0],
@@ -145,7 +148,7 @@ class TestBaseELQR:
 
     def test_forward_pass(self, Q, R, func_list, inv_func_list):
         # inputs
-        baseELQR = base.BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R, horizon_len=3)
         x_hat = np.arange(0, 2).reshape((2, 1))
         x_start = x_hat.copy()
         u_nom = np.array([[1]])
@@ -189,7 +192,7 @@ class TestBaseELQR:
         # test function
         max_time_steps = len(cost_come_mat)
         # forward pass
-        for kk in range(0, max_time_steps - 1):
+        for kk in range(0, baseELQR.horizon_len - 1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
             (x_hat, feedback[kk], feedforward[kk],
              cost_come_mat[kk+1],
@@ -219,7 +222,7 @@ class TestBaseELQR:
 
     def test_backward_pass(self, Q, R, func_list, inv_func_list):
         # Inputs
-        baseELQR = base.BaseELQR(Q=Q, R=R)
+        baseELQR = base.BaseELQR(Q=Q, R=R, horizon_len=3)
         x_hat = np.arange(0, 2).reshape((2, 1))
         x_start = x_hat.copy()
         u_nom = np.array([[1]])
@@ -233,7 +236,6 @@ class TestBaseELQR:
         # Expected Values
         exp_x_hat = np.array([[1.14834458419351],
                               [-2.14621103302943]])
-        exp_u_hat = np.array([[-0.00172699202296389]])
 
         fb1 = np.array([[-0.847207594209788, -0.014217870424957]])
         fb2 = np.array([[0.293040293386971, -0.131868131182320]])
@@ -262,8 +264,7 @@ class TestBaseELQR:
         exp_cost_go_vec = [cgv1, cgv2, cgv3]
 
         # Test Function
-        max_time_steps = len(cost_come_mat)
-        for kk in range(max_time_steps - 2, -1, -1):
+        for kk in range(baseELQR.horizon_len - 2, -1, -1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
             (x_hat, feedback[kk], feedforward[kk], cost_go_mat[kk],
              cost_go_vec[kk]) = baseELQR.backward_pass(x_hat, u_hat,

@@ -7,7 +7,9 @@ Created on Wed May  6 18:43:52 2020
 import pytest
 import numpy as np
 import numpy.testing as test
+from copy import deepcopy
 
+from gasur.estimator import GaussianMixture
 from gasur.guidance.base import GaussianObject
 import gasur.guidance.centralized as guide
 
@@ -36,79 +38,89 @@ class TestELQRGaussian:
         gm1.covariance = Z_mat4.copy()
         gm1.weight = 1
 
-        elqrGaussian = guide.ELQRGaussian(cur_gaussians=[gm1])
+        elqrGaussian = guide.ELQRGaussian(cur_gaussians=[gm1], horizon_len=3)
         assert len(elqrGaussian.gaussians) == 1
         assert len(elqrGaussian.targets.means) == 0
 
         elqrGaussian = guide.ELQRGaussian(cur_gaussians=[gm1],
-                                          wayareas=wayareas, Q=Q)
+                                          wayareas=wayareas, Q=Q,
+                                          horizon_len=3)
         assert len(elqrGaussian.gaussians) == 1
         assert len(elqrGaussian.targets.means) == len(wayareas.means)
         test.assert_allclose(elqrGaussian.state_penalty, Q)
 
-        elqrGaussian = guide.ELQRGaussian()
+        elqrGaussian = guide.ELQRGaussian(horizon_len=3)
         assert len(elqrGaussian.gaussians) == 0
         assert elqrGaussian.state_penalty.size == 0
         test.assert_approx_equal(elqrGaussian.safety_factor, 1.)
         assert len(elqrGaussian.targets.means) == 0
 
-#    def test_initialize(self):
-#        assert 0, 'implement'
+        with pytest.raises(RuntimeError, match=r"Horizon .* ELQR"):
+            elqrGaussian = guide.ELQRGaussian(horizon_len=np.inf)
 
-    def test_quadratize_non_quad_state(self, wayareas):
-        cur_states = np.array([[-6.61516208446766, 7.31118852531110,
-                                -0.872274587078559],
-                               [0.120718435587983, 0.822267374847013,
-                                8.03032533284825],
-                               [-3.70905023905814, 0.109099775533068,
-                                0.869292134509202],
-                               [-0.673511914125811, 0.0704886302223785,
-                                1.37195762201929]])
-        obj_num = 0
-        c1 = np.array([[0.159153553514662, -0.013113139329301,
-                        0.067998235869292, -0.002599022295748],
-                       [-0.013113139329301, 1.091418243231293,
-                        -0.004852173475548, 0.242777767799711],
-                       [0.067998235869292, -0.004852173475548,
-                        0.052482674913465, -0.001137669337119],
-                       [-0.002599022295748, 0.242777767799711,
-                        -0.001137669337119, 0.182621583380687]])
-        c2 = np.array([[0.168615126193114, 0.000427327257979604,
-                        0.0813173846497561, 3.60271394071290e-05],
-                       [0.000427327257979604, 1.63427398127019,
-                        0.000214726953674745, 0.131506716663899],
-                       [0.0813173846497561, 0.000214726953674745,
-                        0.168683528526021, 1.81032165630712e-05],
-                       [3.60271394071290e-05, 0.131506716663899,
-                        1.81032165630712e-05, 0.240588802794357]])
-        c3 = np.array([[0.172523281175800, -0.0880334775266906,
-                        0.0824376519837369, -0.0127439165441394],
-                       [-0.0880334775266907, 1.17602498884724,
-                        -0.0323162663735516, 0.221483755921902],
-                       [0.0824376519837369, -0.0323162663735516,
-                        0.0792669538504277, -0.00591837975207081],
-                       [-0.0127439165441394, 0.221483755921902,
-                        -0.00591837975207081, 0.206656002000548]])
-        cov = [c1, c2, c3]
-        cur_gaussians = []
-        weights = [0.326646270305158, 0.364094073944246, 0.309259655750595]
-        ctr1 = np.array([0.798419210129032, 0.803706982685878])
-        ctr2 = np.array([0., 0.])
-        ctr3 = np.array([-0.700669070490184, 1.52231152743820])
-        ctr = [ctr1, ctr2, ctr3]
-        for ii in range(0, 3):
-            gm = GaussianObject()
-            gm.means = cur_states[:, ii].reshape((1, 4))
-            gm.ctrl_inputs = ctr[ii]
-            gm.covariance = cov[ii]
-            gm.weight = weights[ii]
-            cur_gaussians.append(gm)
+    def test_initialize(self):
+        meas = GaussianMixture()
+        meas.means = [np.array([[1], [2], [3]]), np.array([[4], [5], [6]])]
+        meas.covariances = [2*np.eye(3), 2*np.eye(3)]
+        meas.weights = [1, 1]
+        dyn_lst = [[], []]  # list of lists of functions
+        inv_dyn_lst = [[], []]  # list of lists of functions
+        n_inputs = [1, 1]
+        elqrGaussian = guide.ELQRGaussian()
+
+        elqrGaussian.initialize(meas, dyn_lst, inv_dyn_lst, n_inputs)
+        assert len(elqrGaussian.gaussians) == len(meas.means)
+        for ii, gg in enumerate(elqrGaussian.gaussians):
+            test.assert_allclose(gg.means[[0], :].T, meas.means[ii],
+                                 err_msg='Iteration number: {}'.format(ii))
+
+        obj = GaussianObject()
+        obj.means = np.array([[1, 2, 3], [1, 2, 3], [1, 2, 3]]) + 0.0001
+        obj.covariance = np.eye(3) + 0.01
+        obj.weight = 1
+        obj.dyn_functions = []
+        obj.inv_dyn_functions = []
+        obj.ctrl_inputs = np.array([[1], [1], [1]])
+        obj.feedforward_lst = [np.zeros((3, 1)), np.zeros((3, 3)),
+                               np.zeros((3, 3))]
+        obj.feedback_lst = [np.zeros((3, 3)), np.zeros((3, 3)),
+                            np.zeros((3, 3))]
+        obj.cost_to_come_mat = [np.zeros((3, 3)), np.zeros((3, 3)),
+                                np.zeros((3, 3))]
+        obj.cost_to_come_vec = [np.zeros((3, 1)), np.zeros((3, 1)),
+                                np.zeros((3, 1))]
+        obj.cost_to_go_mat = [np.zeros((3, 3)), np.zeros((3, 3)),
+                              np.zeros((3, 3))]
+        obj.cost_to_go_vec = [np.zeros((3, 1)), np.zeros((3, 1)),
+                              np.zeros((3, 1))]
+        obj.ctrl_nom = np.array([[0]])
+
+        elqrGaussian = guide.ELQRGaussian(cur_gaussians=[obj])
+
+        elqrGaussian.initialize(meas, dyn_lst, inv_dyn_lst, n_inputs)
+        assert len(elqrGaussian.gaussians) == len(meas.means)
+
+        obj2 = deepcopy(obj)
+        obj2.means = np.array([[4, 5, 6], [4, 5, 6], [4, 5, 6]]) + 0.000001
+        elqrGaussian = guide.ELQRGaussian(cur_gaussians=[obj, obj2])
+
+        elqrGaussian.initialize(meas, dyn_lst, inv_dyn_lst, n_inputs)
+
+        for ii, gg in enumerate(elqrGaussian.gaussians):
+            test.assert_allclose(gg.means[[0], :].T, meas.means[ii],
+                                 err_msg='Iteration number: {}'.format(ii))
+
+    def test_quadratize_non_quad_state(self, wayareas, cur_gaussians):
+        cur_states = np.zeros((4, 3))
+        for ii, gg in enumerate(cur_gaussians):
+            cur_states[:, ii] = gg.means[0, :]
         for cov in wayareas.covariances:
             cov[2, 2] = 100.
             cov[3, 3] = 100.
         wayareas.weights = [0.5, 0.5, 0.5, 0.5]
+        obj_num = 0
         elqrGaussian = guide.ELQRGaussian(cur_gaussians=cur_gaussians,
-                                          wayareas=wayareas)
+                                          wayareas=wayareas, horizon_len=3)
 
         exp_Q = np.array([[6.08618287e-08, -7.62808745e-06, -1.31408886e-07,
                            -5.24016660e-10],
@@ -183,7 +195,7 @@ class TestELQRGaussian:
         wayareas.weights = [0.5, 0.5, 0.5, 0.5]
         elqrGaussian = guide.ELQRGaussian(Q=np.eye(4), R=np.eye(2),
                                           cur_gaussians=cur_gaussians,
-                                          wayareas=wayareas)
+                                          wayareas=wayareas, horizon_len=3)
         x_start = np.zeros((4, 1))
         u_nom = np.zeros((2, 1))
 
@@ -206,6 +218,29 @@ class TestELQRGaussian:
 
         test.assert_allclose(Q, exp_Q)
         test.assert_allclose(q, exp_q, atol=1e-8)
+
+    def test_find_nearest_target(self, wayareas, waypoints):
+        elqrGaussian = guide.ELQRGaussian(Q=np.eye(4), R=np.eye(2),
+                                          wayareas=wayareas)
+        state = waypoints[0] + 2
+
+        exp_goal = waypoints[0]
+
+        goal = elqrGaussian.find_nearest_target(state)
+
+        test.assert_allclose(goal, exp_goal)
+
+    def test_final_cost_function(self, wayareas, waypoints):
+        elqrGaussian = guide.ELQRGaussian(Q=np.eye(4), R=np.eye(2),
+                                          wayareas=wayareas)
+        states = np.zeros((2, 4))  # num objects by num states
+        states[0, :] = waypoints[0].squeeze() + 2
+        states[1, :] = waypoints[1].squeeze() + 1
+
+        exp_cost = 20
+
+        cost = elqrGaussian.final_cost_function(states)
+        test.assert_approx_equal(cost, exp_cost)
 
     def test_iterate(self):
         assert 0, 'implement'
