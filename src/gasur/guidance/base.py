@@ -56,8 +56,9 @@ class BaseLQR:
 
 
 class BaseELQR(BaseLQR):
-    def __init__(self, max_iters=50, horizon_len=3, **kwargs):
+    def __init__(self, max_iters=50, horizon_len=3, cost_tol=10**-4, **kwargs):
         self.max_iters = max_iters
+        self.cost_tol = cost_tol
         super().__init__(horizon_len=horizon_len, **kwargs)
         if self.horizon_len == np.inf:
             raise RuntimeError('Horizon must be finite for ELQR')
@@ -294,7 +295,8 @@ class DensityBased:
         self.y_ref = y_ref
         super().__init__(**kwargs)
 
-    def density_based_cost(self, obj_states, obj_weights, obj_covariances):
+    def density_based_cost(self, obj_states, obj_weights, obj_covariances,
+                           **kwargs):
         target_center = self.target_center()
         num_targets = len(self.targets.means)
         num_objects = obj_states.shape[1]

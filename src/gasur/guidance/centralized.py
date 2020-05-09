@@ -23,7 +23,7 @@ class ELQRGaussian(BaseELQR, DensityBased):
     def initialize(self, measured_gaussians, est_dyn_lst, est_inv_dyn_lst,
                    n_inputs_lst, **kwargs):
         # Inputs: GaussianMixture object of observations
-        u_nom_lst = kwargs.get('ctrl_nom_lst', None)
+        u_nom_lst = kwargs.pop('ctrl_nom_lst', None)
 
         num_obs = len(measured_gaussians.means)
         if num_obs == 0:
@@ -100,7 +100,7 @@ class ELQRGaussian(BaseELQR, DensityBased):
                 else:
                     u_nom = u_nom_lst[ii]
                 obj.ctrl_nom = u_nom
-                ff = np.zeros((n_states, n_states))
+                ff = np.zeros((u_nom.shape[0], 1))
                 fb = np.zeros((u_nom.shape[0], n_states))
                 ccm = np.zeros((n_states, n_states))
                 ccv = np.zeros((n_states, 1))
@@ -148,14 +148,17 @@ class ELQRGaussian(BaseELQR, DensityBased):
         return Q, q
 
     def iterate(self, measured_gaussians, **kwargs):
-        final_cost_function = kwargs['final_cost_function']
+        est_dyn_lst = kwargs.pop('est_dyn_lst')
+        est_inv_dyn_lst = kwargs.pop('est_inv_dyn_lst')
+        n_inputs_lst = kwargs.pop('n_inputs_lst')
 
-        self.initialize(measured_gaussians, **kwargs)
+        self.initialize(measured_gaussians, est_dyn_lst, est_inv_dyn_lst,
+                        n_inputs_lst, **kwargs)
         num_gaussians = len(self.gaussians)
         if num_gaussians == 0:
             return
 
-        x_starts = np.zeros((num_gaussians, self.gaussians.means.shape[1]))
+        x_starts = np.zeros((num_gaussians, self.gaussians[0].means.shape[1]))
         for ii, gg in enumerate(self.gaussians):
             x_starts[ii, :] = gg.means[1, :]
 
@@ -165,47 +168,48 @@ class ELQRGaussian(BaseELQR, DensityBased):
             # forward pass
             for kk in range(0, self.horizon_len - 1):
                 cur_states = np.zeros((num_gaussians,
-                                       self.gaussians.means.shape[1]))
+                                       self.gaussians[0].means.shape[1]))
                 for ii, gg in enumerate(self.gaussians):
                     cur_states[ii, :] = gg.means[kk, :]
 
                 # update control for each gaussian
                 for gg in self.gaussians:
-                    gg.ctrl_input[kk, :] = (gg.feedback[kk]
+                    gg.ctrl_input[kk, :] = (gg.feedback_lst[kk]
                                             @ gg.means[[kk], :].T
-                                            + gg.feedforward[kk])
+                                            + gg.feedforward_lst[kk]).squeeze()
 
                 for ii, gg in enumerate(self.gaussians):
                     x_hat = gg.means[[kk], :].T
                     u_hat = gg.ctrl_input[[kk], :].T
-                    feedback = gg.feedback[kk]
-                    feedforward = gg.feedforward[kk]
-                    cost_come_mat = gg.cost_come_mat[kk]
-                    cost_come_vec = gg.cost_come_vec[kk]
-                    cost_go_mat = gg.cost_go_mat[kk+1]
-                    cost_go_vec = gg.cost_go_vec[kk+1]
+                    feedback = gg.feedback_lst[kk]
+                    feedforward = gg.feedforward_lst[kk]
+                    cost_come_mat = gg.cost_to_come_mat[kk]
+                    cost_come_vec = gg.cost_to_come_vec[kk]
+                    cost_go_mat = gg.cost_to_go_mat[kk+1]
+                    cost_go_vec = gg.cost_to_go_vec[kk+1]
                     x_start = x_starts[[ii], :].T
                     u_nom = gg.ctrl_nom
                     f = gg.dyn_functions
                     in_f = gg.inv_dyn_functions
 
-                    (x_hat, gg.feedback[kk], gg.feedforward[kk],
-                     gg.cost_come_mat[kk+1],
-                     gg.cost_come_vec[kk+1]) = self.forard_pass(x_hat, u_hat,
-                                                                feedback,
-                                                                feedforward,
-                                                                cost_come_mat,
-                                                                cost_come_vec,
-                                                                cost_go_mat,
-                                                                cost_go_vec,
-                                                                kk,
-                                                                x_start=x_start,
-                                                                u_nom=u_nom,
-                                                                dyn_fncs=f,
-                                                                inv_dyn_fncs=in_f,
-                                                                all_states=cur_states.T,
-                                                                obj_num=ii,
-                                                                **kwargs)
+                    (x_hat, gg.feedback_lst[kk], gg.feedforward_lst[kk],
+                     gg.cost_to_come_mat[kk+1],
+                     gg.cost_to_come_vec[kk+1]) = self.forard_pass(x_hat,
+                                                                   u_hat,
+                                                                   feedback,
+                                                                   feedforward,
+                                                                   cost_come_mat,
+                                                                   cost_come_vec,
+                                                                   cost_go_mat,
+                                                                   cost_go_vec,
+                                                                   kk,
+                                                                   x_start=x_start,
+                                                                   u_nom=u_nom,
+                                                                   dyn_fncs=f,
+                                                                   inv_dyn_fncs=in_f,
+                                                                   all_states=cur_states.T,
+                                                                   obj_num=ii,
+                                                                   **kwargs)
                     gg.means[[kk+1], :] = x_hat.T
 
             # quadratize final cost
@@ -213,21 +217,22 @@ class ELQRGaussian(BaseELQR, DensityBased):
                 x_hat = gg.means[[-1], :].T
                 u_hat = gg.ctrl_input[[-1], :].T
                 x_end = self.find_nearest_target(gg.means[-1, :])
-                gg.cost_go_mat[-1], gg.cost_go_vec[-1] = \
+                gg.cost_to_go_mat[-1], gg.cost_to_go_vec[-1] = \
                     self.quadratize_final_cost(x_hat, u_hat, x_end=x_end,
                                                **kwargs)
-                gg.means[-1, :] = -la.inv(gg.cost_go_mat[-1]
-                                          + gg.cost_come_mat[-1]) \
-                    @ (gg.cost_go_vec[-1] + gg.cost_come_vec[-1])
+                gg.means[-1, :] = (-la.inv(gg.cost_to_go_mat[-1]
+                                          + gg.cost_to_come_mat[-1])
+                                   @ (gg.cost_to_go_vec[-1]
+                                      + gg.cost_to_come_vec[-1])).squeeze()
 
             # backward pass
             for kk in range(self.horizon_len - 2, -1, -1):
                 prev_states = np.zeros((num_gaussians,
-                                       self.gaussians.means.shape[1]))
+                                       self.gaussians[0].means.shape[1]))
                 for ii, gg in enumerate(self.gaussians):
-                    gg.ctrl_input[kk, :] = (gg.feedback[kk]
+                    gg.ctrl_input[kk, :] = (gg.feedback_lst[kk]
                                             @ gg.means[[kk+1], :].T
-                                            + gg.feedforward[kk])
+                                            + gg.feedforward_lst[kk]).squeeze()
                     for jj, ff in enumerate(gg.inv_dyn_functions):
                         prev_states[ii, jj] = ff(gg.means[kk+1, :],
                                                  gg.ctrl_input[kk, :],
@@ -237,40 +242,41 @@ class ELQRGaussian(BaseELQR, DensityBased):
                 for ii, gg in enumerate(self.gaussians):
                     x_hat = gg.means[[kk+1], :].T
                     u_hat = gg.ctrl_input[[kk], :].T
-                    feedback = gg.feedback[kk]
-                    feedforward = gg.feedforward[kk]
-                    cost_come_mat = gg.cost_come_mat[kk]
-                    cost_come_vec = gg.cost_come_vec[kk]
-                    cost_go_mat = gg.cost_go_mat[kk+1]
-                    cost_go_vec = gg.cost_go_vec[kk+1]
+                    feedback = gg.feedback_lst[kk]
+                    feedforward = gg.feedforward_lst[kk]
+                    cost_come_mat = gg.cost_to_come_mat[kk]
+                    cost_come_vec = gg.cost_to_come_vec[kk]
+                    cost_go_mat = gg.cost_to_go_mat[kk+1]
+                    cost_go_vec = gg.cost_to_go_vec[kk+1]
                     x_start = x_starts[[ii], :].T
                     u_nom = gg.ctrl_nom
                     f = gg.dyn_functions
                     in_f = gg.inv_dyn_functions
 
-                    x_hat, feedback[kk], feedforward[kk], cost_go_mat[kk], \
-                        cost_go_vec[kk] = self.backward_pass(x_hat, u_hat,
-                                                             feedback[kk],
-                                                             feedforward[kk],
-                                                             cost_come_mat[kk],
-                                                             cost_come_vec[kk],
-                                                             cost_go_mat[kk+1],
-                                                             cost_go_vec[kk+1],
-                                                             kk,
-                                                             x_start=x_start,
-                                                             u_nom=u_nom,
-                                                             dyn_fncs=f,
-                                                             inv_dyn_fncs=in_f,
-                                                             all_states=prev_states.T,
-                                                             obj_num=ii
-                                                             **kwargs)
+                    (x_hat, gg.feedback_lst[kk], gg.feedforward_lst[kk],
+                     gg.cost_to_go_mat[kk],
+                     gg.cost_to_go_vec[kk]) = self.backward_pass(x_hat, u_hat,
+                                                                 feedback,
+                                                                 feedforward,
+                                                                 cost_come_mat,
+                                                                 cost_come_vec,
+                                                                 cost_go_mat,
+                                                                 cost_go_vec,
+                                                                 kk,
+                                                                 x_start=x_start,
+                                                                 u_nom=u_nom,
+                                                                 dyn_fncs=f,
+                                                                 inv_dyn_fncs=in_f,
+                                                                 all_states=prev_states.T,
+                                                                 obj_num=ii,
+                                                                 **kwargs)
                     gg.means[[kk], :] = x_hat.T
 
             # find real cost of trajectory
-            # ##TODO: fix this
             states = x_starts
             weight_lst = []
             cov_lst = []
+            n_inputs = self.gaussians[0].feedback_lst[kk].shape[0]
             for gg in self.gaussians:
                 weight_lst.append(gg.weight)
                 cov_lst.append(gg.covariance)
@@ -279,10 +285,11 @@ class ELQRGaussian(BaseELQR, DensityBased):
                 cur_cost += self.density_based_cost(states.T, weight_lst,
                                                     cov_lst, **kwargs)
 
+                ctrl_inputs = np.zeros((num_gaussians, n_inputs))
                 for ii, gg in enumerate(self.gaussians):
                     state = states[[ii], :].T
-                    ctrl_inputs[ii, :] = (gg.feedback[kk] @ state
-                                          + gg.feedforward[kk]).squeeze()
+                    ctrl_inputs[ii, :] = (gg.feedback_lst[kk] @ state
+                                          + gg.feedforward_lst[kk]).squeeze()
                     for jj, ff in enumerate(gg.dyn_functions):
                         states[ii, jj] = ff(state, ctrl_inputs[[ii], :].T,
                                             **kwargs)

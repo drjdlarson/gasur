@@ -81,10 +81,10 @@ class TestELQRGaussian:
         obj.dyn_functions = []
         obj.inv_dyn_functions = []
         obj.ctrl_inputs = np.array([[1], [1], [1]])
-        obj.feedforward_lst = [np.zeros((3, 1)), np.zeros((3, 3)),
-                               np.zeros((3, 3))]
-        obj.feedback_lst = [np.zeros((3, 3)), np.zeros((3, 3)),
-                            np.zeros((3, 3))]
+        obj.feedforward_lst = [np.zeros((1, 1)), np.zeros((1, 1)),
+                               np.zeros((1, 1))]
+        obj.feedback_lst = [np.zeros((1, 3)), np.zeros((1, 3)),
+                            np.zeros((1, 3))]
         obj.cost_to_come_mat = [np.zeros((3, 3)), np.zeros((3, 3)),
                                 np.zeros((3, 3))]
         obj.cost_to_come_vec = [np.zeros((3, 1)), np.zeros((3, 1)),
@@ -242,5 +242,24 @@ class TestELQRGaussian:
         cost = elqrGaussian.final_cost_function(states)
         test.assert_approx_equal(cost, exp_cost)
 
-    def test_iterate(self):
-        assert 0, 'implement'
+    @pytest.mark.slow
+    def test_iterate(self, cur_gaussians, wayareas, dyn_funcs, inv_dyn_funcs):
+        meas = GaussianMixture()
+        meas.means = [np.array([[1], [2], [3], [4]]),
+                      np.array([[4], [5], [6], [7]])]
+        meas.covariances = [2*np.eye(4), 2*np.eye(4)]
+        meas.weights = [0.3, 0.3, 0.3]
+        dyn_lst = [dyn_funcs, dyn_funcs, dyn_funcs]
+        inv_dyn_lst = [inv_dyn_funcs, inv_dyn_funcs, inv_dyn_funcs]
+        n_inputs = [2, 2, 2]
+        for cov in wayareas.covariances:
+            cov[2, 2] = 100.
+            cov[3, 3] = 100.
+        wayareas.weights = [0.5, 0.5, 0.5, 0.5]
+        elqrGaussian = guide.ELQRGaussian(Q=np.eye(4), R=np.eye(2),
+                                          cur_gaussians=cur_gaussians,
+                                          wayareas=wayareas, horizon_len=3)
+
+        elqrGaussian.iterate(meas, est_dyn_lst=dyn_lst,
+                             est_inv_dyn_lst=inv_dyn_lst,
+                             n_inputs_lst=n_inputs, dt=1)

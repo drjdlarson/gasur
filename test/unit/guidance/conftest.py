@@ -114,6 +114,9 @@ def inv_dyn_funcs():
     def f4(x, u, **kwargs):
         return x[3] - u[1]
 
+    return [f1, f2, f3, f4]
+
+
 @pytest.fixture(scope="function")
 def cur_gaussians():
     cur_states = np.array([[-6.61516208446766, 7.31118852531110,
@@ -157,8 +160,10 @@ def cur_gaussians():
     ctr = [ctr1, ctr2, ctr3]
     for ii in range(0, 3):
         gm = GaussianObject()
-        gm.means = cur_states[:, ii].reshape((1, 4))
-        gm.ctrl_inputs = ctr[ii]
+        gm.means = np.zeros((3, 4))
+        gm.means[:, :] = cur_states[:, ii].reshape((1, 4))
+        gm.ctrl_inputs = np.zeros((3, 2))
+        gm.ctrl_inputs[:, :] = ctr[ii]
         gm.covariance = cov[ii]
         gm.weight = weights[ii]
         cur_gaussians.append(gm)
