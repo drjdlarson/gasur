@@ -7,15 +7,16 @@ import numpy as np
 
 
 def get_jacobian(x, fnc, **kwargs):
-    """Numerically calculates the jacobian using the central difference method.
+    """Calculates the jacobian of a function.
 
-    :param x: The point to evaluate at
-    :type x: numpy array
-    :param fnc: The function to evaluate
-    :type fnc: function
+    Numerically calculates the jacobian using the central difference method.
 
-    :return: The jacobain of the function
-    :rtype: Nx1 numpy array
+    Args:
+        x (numpy array): The point to evaluate at
+        fnc (function): The function to evaluate
+
+    Returns:
+        (Nx1 numpy array): The jacobain of the function
     """
     step_size = kwargs.get('step_size', 10**-7)
     inv_step2 = 1 / (2 * step_size)
@@ -31,6 +32,17 @@ def get_jacobian(x, fnc, **kwargs):
 
 
 def get_hessian(x, fnc, **kwargs):
+    """Calculates the hessian of a function.
+
+    Numerically calculates the hessian using the central difference method.
+
+    Args:
+        x (numpy array): The point to evaluate at
+        fnc (function): The function to evaluate
+
+    Returns:
+        (NxN numpy array): The hessian of the function
+    """
     step_size = np.finfo(float).eps**(1/4)
     den = 1 / (4 * step_size**2)
     n_vars = x.size
@@ -59,6 +71,22 @@ def get_hessian(x, fnc, **kwargs):
 
 
 def get_state_jacobian(x, u, fncs, **kwargs):
+    r"""Calculates the jacobian matrix for the state of a state space model.
+
+    Numerically calculates the jacobian using the central difference method
+    for the state of the standard statespace model
+
+    .. math::
+        \dot{x} = Ax + Bu
+
+    Args:
+        x (numpy array): The state to evaluate at
+        u (numpy array): The input to evaluate at
+        fnc (function): The function to evaluate. Must take in x, u
+
+    Returns:
+        J (Nx1 numpy array): The jacobain of the function
+    """
     n_states = x.size
     A = np.zeros((n_states, n_states))
     for row in range(0, n_states):
@@ -69,6 +97,22 @@ def get_state_jacobian(x, u, fncs, **kwargs):
 
 
 def get_input_jacobian(x, u, fncs, **kwargs):
+    r"""Calculates the jacobian matrix for the input of a state space model.
+
+    Numerically calculates the jacobian using the central difference method
+    for the input of the standard statespace model
+
+    .. math::
+        \dot{x} = Ax + Bu
+
+    Args:
+        x (numpy array): The state to evaluate at
+        u (numpy array): The input to evaluate at
+        fnc (function): The function to evaluate. Must take in x, u
+
+    Returns:
+        J (Nx1 numpy array): The jacobain of the function
+    """
     n_states = x.size
     n_inputs = u.size
     B = np.zeros((n_states, n_inputs))

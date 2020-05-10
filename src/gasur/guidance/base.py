@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Fri Feb 28 11:18:28 2020
+"""Implements the base classes for guidance algorithms.
 
-@author: ryan4
+This module contains the classes and data structures used as the base
+for guidance related algorithms.
 """
 import numpy as np
 import scipy.linalg as la
@@ -13,6 +13,27 @@ from gasur.utilities.math import get_state_jacobian, get_input_jacobian
 
 
 class BaseLQR:
+    r""" Implements a Linear Quadratic Regulator (LQR) controller.
+
+        This implements an LQR controller for the cost function
+
+        .. math::
+            J = \frac{1}{2} \left[x_f^T Q x_f + \int^{t_f}_0 x^T Q x + u^T R u
+                     + u^T P x\right]
+
+    Args:
+        Q (N x N numpy array): State penalty matrix (default: empty array)
+        R (Nu x Nu numpy array): Control penalty matrix (default: empty arary)
+        cross_penalty (Nu x N numpy array): Cross penalty matrix (default:
+            zero)
+        horizon_len (int): Length of trajectory to optimize over (default: Inf)
+
+    Attributes:
+        state_penalty (N x N numpy array): State penalty matrix :math:`Q`
+        ctrl_penalty (Nu x Nu numpy array): Control penalty matrix :math:`R`
+        cross_penalty (Nu x N numpy array): Cross penalty matrix
+        horizon_len (int): Length of trajectory to optimize over
+    """
     def __init__(self, Q=None, R=None, cross_penalty=None, horizon_len=None,
                  **kwargs):
         if Q is None:
@@ -34,12 +55,28 @@ class BaseLQR:
         self.horizon_len = horizon_len
         super().__init__(**kwargs)
 
-    def iterate(self, **kwargs):
-        # process input arguments
-        F = kwargs['F']
-        del kwargs['F']
-        G = kwargs['G']
-        del kwargs['G']
+    def iterate(self, F, G, **kwargs):
+        """Calculates the feedback gain.
+
+        If using a finite time horizon, this loops over the entire horizon
+        to calculate the gain :math:`K` such that the control input is
+
+        .. math::
+            u = -Kx
+
+        Args:
+            F (N x N numpy array): Discrete time state matrix
+            G (N x Nu numpy array): Discrete time input matrix
+
+        Raises:
+            RuntimeError: Raised for the finite horizon case
+
+        Todo:
+            Implement the finite horizon case
+
+        Returns:
+            (Nu x N numpy array): Feedback gain :math:`K`
+        """
 
         if self.horizon_len == np.inf:
             P = la.solve_discrete_are(F, G, self.state_penalty,
@@ -56,6 +93,29 @@ class BaseLQR:
 
 
 class BaseELQR(BaseLQR):
+    """ Implements an Extended Linear Quadratic Regulator (ELQR) controller.
+
+        This implements an ELQR controller for cases where the dynamics are
+        non-linear and the cost function is non-quadratic in terms of the
+        state. This can be extended to include other forms of non-quadratic
+        cost functions.
+
+    Args:
+        max_iters (int): Max number of iterations for cost to converge
+        horizon_len (int): See :py:class:`gasur.guidance.base.BaseLQR`
+            (default: 3), can not be Inf
+        cost_tol (float): Tolerance on cost to achieve convergence (default:
+            1e-4)
+
+    Raises:
+        RuntimeError: If `horizon_len` is Inf
+
+    Attributes:
+        max_iters (int): Max number of iterations for cost to converge
+        horizon_len (int): See :py:mod:`gasur.guidance.base.baseLQR`
+        cost_tol (float): Tolerance on cost to achieve convergence
+    """
+
     def __init__(self, max_iters=50, horizon_len=3, cost_tol=10**-4, **kwargs):
         self.max_iters = max_iters
         self.cost_tol = cost_tol
@@ -64,6 +124,30 @@ class BaseELQR(BaseLQR):
             raise RuntimeError('Horizon must be finite for ELQR')
 
     def initialize(self, x_start, n_inputs, **kwargs):
+        """ Initialze the start of an iteration.
+
+        Args:
+            x_start (N x 1 numpy array): starting state of the iteration
+            n_inputs (int): number of control inputs
+
+        Keyword Args:
+            feedback (Nu x N numpy array): Feedback matrix
+            feedforward (Nu x 1 numpy array): Feedforward matrix
+            cost_go_mat (N x N numpy array): Cost-to-go matrix
+            cost_go_vec (N x 1 numpy array): Cost-to-go vector
+            cost_come_mat (N x N numpy array): Cost-to-come matrix
+            cost_come_vec (N x 1 numpy array): Cost-to-come vector
+
+        Returns:
+            tuple containing
+
+                - feedback (Nu x N numpy array): Feedback matrix
+                - feedforward (Nu x 1 numpy array): Feedforward matrix
+                - cost_go_mat (N x N numpy array): Cost-to-go matrix
+                - cost_go_vec (N x 1 numpy array): Cost-to-go vector
+                - cost_come_mat (N x N numpy array): Cost-to-come matrix
+                - cost_come_vec (N x 1 numpy array): Cost-to-come vector
+        """
         n_states = x_start.size
         x_hat = x_start
         feedback = kwargs.get('feedback', np.zeros((n_inputs, n_states)))
@@ -77,12 +161,34 @@ class BaseELQR(BaseLQR):
                 cost_come_mat, cost_come_vec, x_hat)
 
     def quadratize_cost(self, x_start, u_nom, timestep, **kwargs):
-        '''
-        This assumes the true cost function is given by:
-            c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
-            c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
-            c_end = 1/2(x - x_end)^T Q (x - x_end)
-        '''
+        r""" Quadratizes the cost function.
+
+        This assumes the true cost function is given
+
+        .. math::
+            c_0 &= \frac{1}{2}(x - x_0)^T Q (x - x_0) + \frac{1}{2}(u
+                - u_0)^T R (u - u_0) \\
+            c_t &= \frac{1}{2}(u - u_{nom})^T R (u - u_{nom})
+                + \text{non quadratic state term(s)} \\
+            c_{end} &= \frac{1}{2}(x - x_{end})^T Q (x - x_{end})
+
+        Args:
+            x_start (N x 1 numpy array): Starting point of the iteration
+            u_nom (Nu x 1 numpy array): Nominal control input
+            timestep (int): Timestep number, starts at 0 and is relative to
+                the begining of the current time horizon
+            **kwargs : any arguments needed by
+                :py:meth:`gasur.guidance.base.BaseELQR.quadratize_non_quad_state`
+
+        Returns:
+            tuple containing
+
+                - P (Nu x N numpy array): cross state penalty matrix
+                - Q (N x N numpy array): state penalty matrix
+                - R (Nu x Nu numpy array): control input penalty matrix
+                - q (N x 1 numpy array): state penalty vector
+                - r (Nu x 1 numpy array): control input penalty vector
+        """
         if timestep == 0:
             Q = self.state_penalty
             q = -Q @ x_start
@@ -96,18 +202,55 @@ class BaseELQR(BaseLQR):
         return P, Q, R, q, r
 
     def quadratize_non_quad_state(self, x_hat=None, **kwargs):
+        r"""Quadratizes the non-quadratic state.
+
+        This assumes the true cost function is given
+
+        .. math::
+            c_0 &= \frac{1}{2}(x - x_0)^T Q (x - x_0) + \frac{1}{2}(u
+                - u_0)^T R (u - u_0) \\
+            c_t &= \frac{1}{2}(u - u_{nom})^T R (u - u_{nom})
+                + \text{non quadratic state term(s)} \\
+            c_{end} &= \frac{1}{2}(x - x_{end})^T Q (x - x_{end})
+
+        Args:
+            x_hat (N x 1 numpy array): Current state
+
+        Returns:
+            tuple containing
+
+                - Q (N x N numpy array): state penalty matrix
+                - q (N x 1 numpy array): state penalty vector
+
+        Todo:
+            Improve implementation to use the hessian of the non-quadratic
+            cost function
+        """
         Q = self.state_penalty
         q = np.zeros((x_hat.size, 1))
         return Q, q
 
-    def quadratize_final_cost(self, x_hat, u_hat, **kwargs):
-        '''
-        This assumes the true cost function is given by:
-            c_0 = 1/2(x - x_0)^T Q (x - x_0) + 1/2(u - u_0)^T R (u - u_0)
-            c_t = 1/2(u - u_nom)^T R (u - u_nom) + non quadratic state term(s)
-            c_end = 1/2(x - x_end)^T Q (x - x_end)
-        '''
-        x_end = kwargs['x_end']
+    def quadratize_final_cost(self, x_end, **kwargs):
+        r"""Quadratizes the cost for the final timestep.
+
+        This assumes the true cost function is given
+
+        .. math::
+            c_0 &= \frac{1}{2}(x - x_0)^T Q (x - x_0) + \frac{1}{2}(u
+                - u_0)^T R (u - u_0) \\
+            c_t &= \frac{1}{2}(u - u_{nom})^T R (u - u_{nom})
+                + \text{non quadratic state term(s)} \\
+            c_{end} &= \frac{1}{2}(x - x_{end})^T Q (x - x_{end})
+
+        Args:
+            x_end (N x 1 numpy array): Desired ending state
+
+        Returns:
+            tuple containing
+
+                - Q (N x N numpy array): state penalty matrix
+                - q (N x 1 numpy array): state penalty vector
+        """
         Q = self.state_penalty
         q = -Q @ x_end
 

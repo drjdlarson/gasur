@@ -32,7 +32,9 @@ release = '0.0.0'
 extensions = [
         'sphinx.ext.autodoc',
         'sphinx.ext.napoleon',
-        'sphinx.ext.autosummary']
+        'sphinx.ext.autosummary',
+        'sphinx.ext.mathjax',
+        'sphinx.ext.todo']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -48,10 +50,12 @@ autodoc_default_flags = [
          # Make sure that any autodoc declarations show the right members
          "members",
          "inherited-members",
-         "private-members",
          "show-inheritance",
 ]
 autosummary_generate = True
+
+# Todo configuration
+todo_include_todos = True
 
 
 # -- Options for HTML output -------------------------------------------------
