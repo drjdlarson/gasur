@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Apr 19 10:22:52 2020
+This file contains useful math utility functions.
 
-@author: ryan4
 """
 import numpy as np
 
 
-def_step_size = 10**-7
-
-
 def get_jacobian(x, fnc, **kwargs):
-    step_size = kwargs.get('step_size', def_step_size)
+    """Numerically calculates the jacobian using the central difference method.
+
+    :param x: The point to evaluate at
+    :type x: numpy array
+    :param fnc: The function to evaluate
+    :type fnc: function
+
+    :return: The jacobain of the function
+    :rtype: Nx1 numpy array
+    """
+    step_size = kwargs.get('step_size', 10**-7)
     inv_step2 = 1 / (2 * step_size)
     n_vars = x.size
     J = np.zeros((n_vars, 1))
