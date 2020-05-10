@@ -271,14 +271,15 @@ class BaseELQR(BaseLQR):
             for kk in range(0, self.horizon_len - 1):
                 (x_hat, u_hat, feedback[kk], feedforward[kk],
                  cost_come_mat[kk+1],
-                 cost_come_vec[kk+1]) = self.forard_pass(x_hat, feedback[kk],
-                                                         feedforward[kk],
-                                                         cost_come_mat[kk],
-                                                         cost_come_vec[kk],
-                                                         cost_go_mat[kk+1],
-                                                         cost_go_vec[kk+1],
-                                                         kk, x_start=x_start,
-                                                         u_nom=u_nom, **kwargs)
+                 cost_come_vec[kk+1]) = self.forward_pass(x_hat, feedback[kk],
+                                                          feedforward[kk],
+                                                          cost_come_mat[kk],
+                                                          cost_come_vec[kk],
+                                                          cost_go_mat[kk+1],
+                                                          cost_go_vec[kk+1],
+                                                          kk, x_start=x_start,
+                                                          u_nom=u_nom,
+                                                          **kwargs)
 
             # quadratize final cost
             cost_go_mat[-1], cost_go_vec[-1] = \
@@ -318,6 +319,18 @@ class BaseELQR(BaseLQR):
         return feedback, feedforward
 
     def final_cost_function(self, state, goal, **kwargs):
+        """Cost function at the ending state.
+
+        Args:
+            state (numpy array): final state
+            goal (numpy array): desired ending state
+
+        Returns:
+            (float): cost of the final state
+
+        Raises:
+            RuntimeError: if the goal and state are different dimensions
+        """
         if state.ndim != 2:
             state = state.reshape((state.size, 1))
         if goal.ndim != 2:
@@ -332,6 +345,31 @@ class BaseELQR(BaseLQR):
 
     def cost_to_go(self, cost_go_mat, cost_go_vec, P, Q, R, q, r,
                    state_mat, input_mat, c_vec, **kwargs):
+        """Calculates the cost-to-go.
+
+        Calculates the cost-to-go matrix and vectors as well as the
+        feedforward and feedback gains
+
+        Args:
+            cost_go_mat (N x N numpy array): current cost-to-go matrix
+            cost_go_vec (N x 1 numpy array): current cost-to-go vector
+            P (Nu x N numpy array): cross penalty matrix
+            Q (N x N numpy array): state penalty matrix
+            R (Nu x Nu numpy array): input penalty matrix
+            q (N x 1 numpy array): state penalty vector
+            r (Nu x 1 numpy array): input penalty vector
+            state_mat (N x N numpy array): state transition matrix
+            input_mat (N x Nu numpy array): control input matrix
+            c_vec (N x 1): extra vector from the state space equation
+
+        Returns:
+            tuple containing
+
+                - cost_go_mat_out (N x N numpy array): cost-to-go matrix
+                - cost_go_vec_out (N x 1 numpy array): cost-to-go vector
+                - feedback (Nu x N numpy array): feedback gain matrix
+                - feedforward (N x 1 numpy array): feedforward gain matrix
+        """
         c_mat = input_mat.T @ cost_go_mat @ state_mat + P
         d_mat = state_mat.T @ cost_go_mat @ state_mat + Q
         e_mat = input_mat.T @ cost_go_mat @ input_mat + R
@@ -350,6 +388,32 @@ class BaseELQR(BaseLQR):
 
     def cost_to_come(self, cost_come_mat, cost_come_vec, P, Q, R, q, r,
                      state_mat_bar, input_mat_bar, c_bar_vec, **kwargs):
+        """Calculates the cost-to-come.
+
+        Calculates the cost-to-come matrix and vectors as well as the
+        feedforward and feedback gains
+
+        Args:
+            cost_come_mat (N x N numpy array): current cost-to-go matrix
+            cost_come_vec (N x 1 numpy array): current cost-to-go vector
+            P (Nu x N numpy array): cross penalty matrix
+            Q (N x N numpy array): state penalty matrix
+            R (Nu x Nu numpy array): input penalty matrix
+            q (N x 1 numpy array): state penalty vector
+            r (Nu x 1 numpy array): input penalty vector
+            state_mat_bar (N x N numpy array): inverse state transition matrix
+            input_mat_bar (N x Nu numpy array): inverse control input matrix
+            c_vec_bar (N x 1): extra vector from the inverse state space
+                equation
+
+        Returns:
+            tuple containing
+
+                - cost_come_mat_out (N x N numpy array): cost-to-go matrix
+                - cost_come_vec_out (N x 1 numpy array): cost-to-go vector
+                - feedback (Nu x N numpy array): feedback gain matrix
+                - feedforward (N x 1 numpy array): feedforward gain matrix
+        """
         S_bar_Q = cost_come_mat + Q
         s_bar_q_sqr_c_bar = cost_come_vec + q + S_bar_Q @ c_bar_vec
 
@@ -375,6 +439,35 @@ class BaseELQR(BaseLQR):
     def backward_pass(self, x_hat, u_hat, feedback, feedforward,
                       cost_come_mat, cost_come_vec, cost_go_mat, cost_go_vec,
                       timestep, dyn_fncs, inv_dyn_fncs, **kwargs):
+        """ Implements the backward pass of the ELQR algorithm for a single
+        timestep.
+
+        Args:
+            x_hat (N x 1 numpy array): current state
+            u_hat (N x 1 numpy array): current input
+            feedback (Nu x N numpy array): feedback gain matrix
+            feedforward (Nu x 1 numpy array): feedforward gain matrix
+            cost_come_mat (N x N numpy array): cost-to-come matrix
+            cost_come_vec (N x 1 numpy array): cost-to-come vector
+            cost_go_mat (N x N numpy array): cost-to-go matrix
+            cost_go_vec (N x 1 numpy array): cost-to-go vector
+            timestep (int): current time step, starts at 0 every time horizon
+            dyn_fncs (list of functions): dynamics functions, one per state,
+                must take in x, u as parameters
+            inv_dyn_fncs (list of functions): inverse dynamics functions,
+                one per state, must take in x, u as parameters
+            **kwargs : passed through to
+                :py:meth:`gasur.guidance.base.BaseELQR.quadratize_cost`
+
+        Returns:
+            tuple containing
+
+                - x_hat (N x 1 numpy array): prior state
+                - feedback (Nu x N numpy array): prior feedback gain
+                - feedforward (N x 1 numpy array): prior feedforward gain
+                - cost_go_mat_out (N x N numpy array): prior cost-to-go matrix
+                - cost_go_vec_out (N x 1 numpy array): prior cost-to-go vector
+        """
         x_hat_prime = np.zeros(x_hat.shape)
         for ii, gg in enumerate(inv_dyn_fncs):
             x_hat_prime[ii] = gg(x_hat, u_hat, **kwargs)
@@ -399,9 +492,38 @@ class BaseELQR(BaseLQR):
         return (x_hat, feedback, feedforward, cost_go_mat_out,
                 cost_go_vec_out)
 
-    def forard_pass(self, x_hat, u_hat, feedback, feedforward, cost_come_mat,
-                    cost_come_vec, cost_go_mat, cost_go_vec, timestep,
-                    dyn_fncs, inv_dyn_fncs, **kwargs):
+    def forward_pass(self, x_hat, u_hat, feedback, feedforward, cost_come_mat,
+                     cost_come_vec, cost_go_mat, cost_go_vec, timestep,
+                     dyn_fncs, inv_dyn_fncs, **kwargs):
+        """ Implements the forward pass of the ELQR algorithm for a single
+        timestep.
+
+        Args:
+            x_hat (N x 1 numpy array): current state
+            u_hat (N x 1 numpy array): current input
+            feedback (Nu x N numpy array): feedback gain matrix
+            feedforward (Nu x 1 numpy array): feedforward gain matrix
+            cost_come_mat (N x N numpy array): cost-to-come matrix
+            cost_come_vec (N x 1 numpy array): cost-to-come vector
+            cost_go_mat (N x N numpy array): cost-to-go matrix
+            cost_go_vec (N x 1 numpy array): cost-to-go vector
+            timestep (int): current time step, starts at 0 every time horizon
+            dyn_fncs (list of functions): dynamics functions, one per state,
+                must take in x, u as parameters
+            inv_dyn_fncs (list of functions): inverse dynamics functions,
+                one per state, must take in x, u as parameters
+            **kwargs : passed through to
+                :py:meth:`gasur.guidance.base.BaseELQR.quadratize_cost`
+
+        Returns:
+            tuple containing
+
+                - x_hat (N x 1 numpy array): next state
+                - feedback (Nu x N numpy array): next feedback gain
+                - feedforward (N x 1 numpy array): next feedforward gain
+                - cost_go_mat_out (N x N numpy array): next cost-to-go matrix
+                - cost_go_vec_out (N x 1 numpy array): next cost-to-go vector
+        """
         x_hat_prime = np.zeros(x_hat.shape)
         for ii, ff in enumerate(dyn_fncs):
             x_hat_prime[ii] = ff(x_hat, u_hat, **kwargs)
@@ -430,16 +552,71 @@ class BaseELQR(BaseLQR):
 
 
 class DensityBased:
+    """Defines the base data structure for guidance using Gaussian Mixtures.
+    
+    Args:
+        wayareas (GaussianMixture): desired target distributions, see
+            :py:class:`gasur.estimator.GaussianMixture`
+        safety_factor (float): overbounding saftey factor when calculating the
+            radius of influence for the activation function (default: 1).
+        y_ref (float): Reference point on the sigmoid, must be less than 1
+            (default: 0.9)
+
+    Raises:
+        ValueError: if y_ref is greater than 1
+
+    Attributes:
+        targets (GaussianMixture): desired target distributions, see
+            :py:class:`gasur.estimator.GaussianMixture`
+        safety_factor (float): overbounding saftey factor when calculating the
+            radius of influence for the activation function.
+        y_ref (float): Reference point on the sigmoid, must be less than 1
+    """
     def __init__(self, wayareas=None, safety_factor=1, y_ref=0.9, **kwargs):
         if wayareas is None:
             wayareas = GaussianMixture()
         self.targets = wayareas
         self.safety_factor = safety_factor
+        if y_ref >= 1:
+            raise ValueError('Reference point must be less than 1')
         self.y_ref = y_ref
         super().__init__(**kwargs)
 
     def density_based_cost(self, obj_states, obj_weights, obj_covariances,
                            **kwargs):
+        r"""Implements the density based cost function.
+
+        Implements the following cost function based on the difference between
+        Gaussian mixtures, with additional terms to improve convergence when
+        far from the targets.
+
+        .. math::
+            J &= \sum_{k=1}^{T} 10 N_g\sigma_{g,max}^2 \left( \sum_{j=1}^{N_g}
+                    \sum_{i=1}^{N_g} w_{g,k}^{(j)} w_{g,k}^{(i)}
+                    \mathcal{N}( \mathbf{m}^{(j)}_{g,k}; \mathbf{m}^{(i)}_{g,k},
+                    P^{(j)}_{g, k} + P^{(i)}_{g, k} ) \right. \\
+                &- \left. 20 \sigma_{d, max}^2 N_d \sum_{j=1}^{N_d} \sum_{i=1}^{N_g}
+                    w_{d,k}^{(j)} w_{g,k}^{(i)} \mathcal{N}(
+                    \mathbf{m}^{(j)}_{d, k}; \mathbf{m}^{(i)}_{g, k},
+                    P^{(j)}_{d, k} + P^{(i)}_{g, k} ) \right) \\
+                &+ \sum_{j=1}^{N_d} \sum_{i=1}^{N_d} w_{d,k}^{(j)}
+                    w_{d,k}^{(i)} \mathcal{N}( \mathbf{m}^{(j)}_{d,k};
+                    \mathbf{m}^{(i)}_{d,k}, P^{(j)}_{d, k} + P^{(i)}_{d, k} ) \\
+                &+ \alpha \sum_{j=1}^{N_d} \sum_{i=1}^{N_g} w_{d,k}^{(j)}
+                    w_{g,k}^{(i)} \ln{\mathcal{N}( \mathbf{m}^{(j)}_{d,k};
+                    \mathbf{m}^{(i)}_{g,k}, P^{(j)}_{d, k} + P^{(i)}_{g, k} )}
+
+        Args:
+            obj_states (N x Ng numpy array): Matrix of all the object's states,
+                each column is one objects state
+            obj_weights (list of floats): weight of each state, same order as
+                obj_states
+            obj_covariances (list): list of N x N numpy arrays representing
+                each states covariance matrix
+
+        Returns:
+            (float): density based cost
+        """
         target_center = self.target_center()
         num_targets = len(self.targets.means)
         num_objects = obj_states.shape[1]
@@ -522,6 +699,19 @@ class DensityBased:
             + sum_target_target + activator * quad
 
     def convert_waypoints(self, waypoints):
+        """Converts waypoints into wayareas.
+
+        Args:
+            waypoints (list): each element is a N x 1 numpy array representing
+                a desired state
+
+        Returns:
+            (GaussianMixture): desired wayareas, see :py:class:`gasur.estimator.GaussianMixture`
+
+        Todo:
+            Ensure the calculated covariance is full rank and positive
+            semi-definite
+        """
         center_len = waypoints[0].size
         num_waypoints = len(waypoints)
         combined_centers = np.zeros((center_len, num_waypoints+1))
@@ -588,6 +778,16 @@ class DensityBased:
         return wayareas
 
     def update_targets(self, new_waypoints, **kwargs):
+        """Updates the target list.
+
+        Args:
+            new_waypoints (list): each element is a N x 1 numpy array
+                representing at target state
+
+        Keyword Args:
+            reset (bool): Removes the current targets if true, else appends
+                new_waypoints to the current set of targets
+        """
         reset = kwargs.get('reset', False)
         if not reset:
             for m in self.targets.means:
@@ -597,6 +797,11 @@ class DensityBased:
         self.targets = self.convert_waypoints(new_waypoints)
 
     def target_center(self):
+        """Calculates the mean of the overall target distribution.
+        
+        Returns:
+            (N x 1 numpy array): the mean of the target states
+        """
         summed = np.zeros(self.targets.means[0].shape)
         num_tars = len(self.targets.means)
         for ii in range(0, num_tars):
@@ -605,6 +810,70 @@ class DensityBased:
 
 
 class GaussianObject:
+    """Data structure for an object defined by a Gaussian distribution.
+
+    This defines the attributes for a general object used in
+    Gaussian based guidance algorithms.
+
+    Keyword Args:
+        dyn_functions (list of functions): list of dynamics functions, 1 per
+            state, same order as state variables, must take in x, u
+        inv_dyn_functions (list of functions): list of inverse dynamics
+            functions, 1 per state, same order as state variables, must take
+            in x, u
+        means (Nh x N numpy array): the state at each timestep of the time
+            horizon
+        ctrl_inputs (Nh x Nu numpy array): control input at each timestep of
+            the time horizon
+        feedforward (list): list of numpy arrays of the Nu x 1 feedforward
+            gain, one for each timestep of the time horizon
+        feedback (list): list of numpy arrays of the Nu x N feedforward
+            gain, one for each timestep of the time horizon
+        cost_to_come_mat (list): list of numpy arras of the N x N cost-to-come
+            matrix, one for wach timestep of the time horizon
+        cost_to_come_vec (list): list of numpy arras of the N x 1 cost-to-come
+            vector, one for wach timestep of the time horizon
+        cost_to_go_mat (list): list of numpy arras of the N x N cost-to-go
+            matrix, one for wach timestep of the time horizon
+        cost_to_go_mat (list): list of numpy arras of the N x 1 cost-to-go
+            vector, one for wach timestep of the time horizon
+        covariance (N x N numpy array): covariance matrix
+        weight (float): weight of the Gaussian in the mixture, must be greater
+            than 0
+        ctrl_nom (Nu x 1 numpy array): nominal control input
+
+    Raises:
+        ValueError: if weight is less than or equal to 0
+
+    Attributes:
+        dyn_functions (list of functions): list of dynamics functions, 1 per
+            state, same order as state variables, must take in x, u
+        inv_dyn_functions (list of functions): list of inverse dynamics
+            functions, 1 per state, same order as state variables, must take
+            in x, u
+        means (Nh x N numpy array): the state at each timestep of the time
+            horizon
+        ctrl_inputs (Nh x Nu numpy array): control input at each timestep of
+            the time horizon
+        feedforward (list): list of numpy arrays of the Nu x 1 feedforward
+            gain, one for each timestep of the time horizon
+        feedback (list): list of numpy arrays of the Nu x N feedforward
+            gain, one for each timestep of the time horizon
+        cost_to_come_mat (list): list of numpy arras of the N x N cost-to-come
+            matrix, one for wach timestep of the time horizon
+        cost_to_come_vec (list): list of numpy arras of the N x 1 cost-to-come
+            vector, one for wach timestep of the time horizon
+        cost_to_go_mat (list): list of numpy arras of the N x N cost-to-go
+            matrix, one for wach timestep of the time horizon
+        cost_to_go_vec (list): list of numpy arras of the N x 1 cost-to-go
+            vector, one for wach timestep of the time horizon
+        covariance (N x N numpy array): covariance matrix, only 1 for entire
+            time horizon
+        weight (float): weight of the Gaussian in the mixture, must be greater
+            than 0
+        ctrl_nom (Nu x 1 numpy array): nominal control input
+    """
+
     def __init__(self, **kwargs):
         self.dyn_functions = kwargs.get('dyn_functions', [])
         self.inv_dyn_functions = kwargs.get('inv_dyn_functions', [])
@@ -624,7 +893,6 @@ class GaussianObject:
         # only 1 for entire trajectory
         self.covariance = kwargs.get('covariance', np.array([[]]))
         self.weight = kwargs.get('weight', 0)
+        if self.weight <= 0:
+            raise ValueError('Weight must be greater than 0')
         self.ctrl_nom = kwargs.get('ctrl_nom', np.array([[]]))
-
-    def time_horizon(self):
-        return self.means.shape[0]

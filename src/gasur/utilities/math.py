@@ -85,7 +85,7 @@ def get_state_jacobian(x, u, fncs, **kwargs):
         fnc (function): The function to evaluate. Must take in x, u
 
     Returns:
-        J (Nx1 numpy array): The jacobain of the function
+        (Nx1 numpy array): The jacobain of the function
     """
     n_states = x.size
     A = np.zeros((n_states, n_states))
@@ -111,7 +111,7 @@ def get_input_jacobian(x, u, fncs, **kwargs):
         fnc (function): The function to evaluate. Must take in x, u
 
     Returns:
-        J (Nx1 numpy array): The jacobain of the function
+        (Nx1 numpy array): The jacobain of the function
     """
     n_states = x.size
     n_inputs = u.size

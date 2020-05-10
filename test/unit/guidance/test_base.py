@@ -190,13 +190,11 @@ class TestBaseELQR:
         exp_cost_come_vec = [ccv1, ccv2, ccv3]
 
         # test function
-        max_time_steps = len(cost_come_mat)
-        # forward pass
         for kk in range(0, baseELQR.horizon_len - 1):
             u_hat = feedback[kk] @ x_hat + feedforward[kk]
             (x_hat, feedback[kk], feedforward[kk],
              cost_come_mat[kk+1],
-             cost_come_vec[kk+1]) = baseELQR.forard_pass(x_hat, u_hat,
+             cost_come_vec[kk+1]) = baseELQR.forward_pass(x_hat, u_hat,
                                                          feedback[kk],
                                                          feedforward[kk],
                                                          cost_come_mat[kk],

@@ -194,22 +194,22 @@ class ELQRGaussian(BaseELQR, DensityBased):
 
                     (x_hat, gg.feedback_lst[kk], gg.feedforward_lst[kk],
                      gg.cost_to_come_mat[kk+1],
-                     gg.cost_to_come_vec[kk+1]) = self.forard_pass(x_hat,
-                                                                   u_hat,
-                                                                   feedback,
-                                                                   feedforward,
-                                                                   cost_come_mat,
-                                                                   cost_come_vec,
-                                                                   cost_go_mat,
-                                                                   cost_go_vec,
-                                                                   kk,
-                                                                   x_start=x_start,
-                                                                   u_nom=u_nom,
-                                                                   dyn_fncs=f,
-                                                                   inv_dyn_fncs=in_f,
-                                                                   all_states=cur_states.T,
-                                                                   obj_num=ii,
-                                                                   **kwargs)
+                     gg.cost_to_come_vec[kk+1]) = self.forward_pass(x_hat,
+                                                                    u_hat,
+                                                                    feedback,
+                                                                    feedforward,
+                                                                    cost_come_mat,
+                                                                    cost_come_vec,
+                                                                    cost_go_mat,
+                                                                    cost_go_vec,
+                                                                    kk,
+                                                                    x_start=x_start,
+                                                                    u_nom=u_nom,
+                                                                    dyn_fncs=f,
+                                                                    inv_dyn_fncs=in_f,
+                                                                    all_states=cur_states.T,
+                                                                    obj_num=ii,
+                                                                    **kwargs)
                     gg.means[[kk+1], :] = x_hat.T
 
             # quadratize final cost
