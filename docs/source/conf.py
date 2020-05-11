@@ -12,6 +12,7 @@
 #
 import os
 import sys
+import sphinx_theme
 sys.path.append(os.path.abspath('../../src/gasur'))
 
 # -- Project information -----------------------------------------------------
@@ -25,6 +26,7 @@ release = '0.0.0'
 
 
 # -- General configuration ---------------------------------------------------
+html_show_sourcelink = False
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
@@ -34,7 +36,9 @@ extensions = [
         'sphinx.ext.napoleon',
         'sphinx.ext.autosummary',
         'sphinx.ext.mathjax',
-        'sphinx.ext.todo']
+        'sphinx.ext.todo',
+        'sphinx.ext.viewcode',
+        ]
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -65,8 +69,7 @@ todo_include_todos = True
 # a list of builtin themes.
 #
 # html_theme = 'classic'
-#html_theme = 'alabaster'
-import sphinx_theme
+# html_theme = 'alabaster'
 html_theme = "stanford_theme"
 html_theme_path = [sphinx_theme.get_html_theme_path('stanford-theme')]
 

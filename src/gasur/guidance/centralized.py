@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Sun Apr 19 10:22:52 2020
+"""This module contains centralized guidance algorithms.
 
-@author: ryan4
+This module contains classes, and data structures needed to implement
+specific centralized guidance algorithms. Many inherit from classs in
+:py:mod:`gasur.guidance.base`.
 """
 import numpy as np
 import scipy.linalg as la
@@ -13,15 +14,54 @@ from gasur.utilities.math import get_hessian, get_jacobian
 
 
 class ELQRGaussian(BaseELQR, DensityBased):
+    r""" Implements centralized Extended LQR for gaussian mixtures.
+
+    Args:
+        cur_gaussians (list): list of gaussian objects
+        similar_thresh (float): minimum probability threshold for
+            :math:`\chi^2` similarity test
+
+    Raises:
+        VaueError: if similar_thresh is greater than or equal to 1
+
+    Attributes:
+        cur_gaussians (list): list of gaussian objects
+        similar_thresh (float): minimum probability threshold for
+            :math:`\chi^2` similarity test
+    """
+
     def __init__(self, cur_gaussians=None, similar_thresh=0.95, **kwargs):
         if cur_gaussians is None:
             cur_gaussians = []
         self.gaussians = cur_gaussians  # list of GaussianObjects
         self.similar_thresh = similar_thresh
+        if self.similar_thresh >= 1:
+            raise ValueError('similar_thresh must be less than 1')
         super().__init__(**kwargs)
 
     def initialize(self, measured_gaussians, est_dyn_lst, est_inv_dyn_lst,
                    n_inputs_lst, **kwargs):
+        """ (Re-)initializes for current optimization attempt.
+
+        Converts measured values into class data structures and compares with
+        values calculated from the last call
+        to :py:meth:`gasur.guidance.centralized.ELQRGaussian.iterate`. If
+        none match, then the measurents are held and remaining properties set
+        to zero. Overrides base class version.
+
+        Args:
+            meausred_gaussians (GaussianMixture): currently observed Gaussians
+            est_dyn_lst (list): each element is a list of dynamics functions,
+                must take x, u as parameters
+            est_inv_dyn_lst (list): each element is a list of inverse dynamics
+                functions, must take x, u as parameters
+            n_inputs_lst (list): each element is the number of control inputs
+                for the corresponding dynamics functions
+
+        Keyword Args:
+            u_nom_lst (list): list of Nu x 1 numpy arrays representing the
+                nominal control input for the corresponding dynamics functions
+        """
         # Inputs: GaussianMixture object of observations
         u_nom_lst = kwargs.pop('ctrl_nom_lst', None)
 
@@ -121,6 +161,25 @@ class ELQRGaussian(BaseELQR, DensityBased):
 
     def quadratize_non_quad_state(self, all_states=None, obj_num=None,
                                   **kwargs):
+        """Quadratizes the non-quadratic state terms in the cost function.
+
+        Overrides the base class version,
+        see :py:meth:`gasur.guidance.base.BaseELQR.quadratize_non_quad_state`
+
+        Args:
+            all_states (N x Ng numpy array): matrix containing states of all
+                gaussians for current timestep
+            obj_num (int): index of the guassian object currently being
+                evaluated
+            **kwargs : passed through
+                to :py:meth:`gasur.utilities.math.get_hessian`
+
+        Returns:
+            tuple containing
+
+                - Q (N x N numpy array): state penalty matrix
+                - q (N x 1 numpy array): state penalty vector
+        """
         def helper(x, cur_states):
             loc_states = cur_states.copy()
             loc_states[:, [obj_num]] = x.copy()
@@ -148,6 +207,22 @@ class ELQRGaussian(BaseELQR, DensityBased):
         return Q, q
 
     def iterate(self, measured_gaussians, **kwargs):
+        """Performs one iteration of the ELQR over the entire time horizon.
+
+        Overrides base class,
+        see :py:meth:`gasur.guidance.base.BaseELQR.iterate`
+
+        Args:
+            measured_gaussians (GaussianMixture): currently measured gaussians
+
+        Keyword Args:
+            est_dyn_lst (list): each element is a list of dynamics functions,
+                must take x, u as parameters
+            est_inv_dyn_lst (list): each element is a list of inverse dynamics
+                functions, must take x, u as parameters
+            n_inputs_lst (list): each element is the number of control inputs
+                for the corresponding dynamics functions
+        """
         est_dyn_lst = kwargs.pop('est_dyn_lst')
         est_inv_dyn_lst = kwargs.pop('est_inv_dyn_lst')
         n_inputs_lst = kwargs.pop('n_inputs_lst')
@@ -302,9 +377,17 @@ class ELQRGaussian(BaseELQR, DensityBased):
             if converged:
                 break
 
-        return feedback, feedforward
-
     def final_cost_function(self, all_states, **kwargs):
+        """Calculates the true cost at the final timestep.
+        
+        Wrapper around base class version,
+        see :py:meth:`gasur.guidance.base.BaseELQR.final_cost_function`
+
+        Args:
+            all_states (Ng x N numpy array): array of the ending statess for
+                all gaussians
+            **kwargs : passed through to base class version
+        """
         cost = 0
         for state in all_states:
             goal = self.find_nearest_target(state)
@@ -312,6 +395,16 @@ class ELQRGaussian(BaseELQR, DensityBased):
         return cost
 
     def find_nearest_target(self, state):
+        """ Finds target closest to the given state.
+
+        Uses the :math:`L_2` distance to find the closest target.
+
+        Args:
+            state (N x 1 numpy array): current state
+
+        Returns:
+            (N x 1 numpy array): nearest target
+        """
         x_end = []
         min_dist = np.inf
         for goal in self.targets.means:
