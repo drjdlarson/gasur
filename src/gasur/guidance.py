@@ -1,16 +1,363 @@
-# -*- coding: utf-8 -*-
-"""This module contains centralized guidance algorithms.
+"""Implements RFS guidance algorithms.
 
-This module contains classes, and data structures needed to implement
-specific centralized guidance algorithms. Many inherit from classs in
-:py:mod:`gasur.guidance.base`.
+This module contains the classes and data structures
+for RFS guidance related algorithms.
 """
 import numpy as np
 import scipy.linalg as la
-from scipy.stats.distributions import chi2
+from scipy.stats import multivariate_normal as mvn
 
-from gasur.guidance.base import BaseELQR, DensityBased, GaussianObject
-from gasur.utilities.math import get_hessian, get_jacobian
+from gasur.estimator import GaussianMixture
+from gncpy.math import get_hessian, get_jacobian
+from gncpy.control import BaseELQR
+
+
+class DensityBased:
+    """Defines the base data structure for guidance using Gaussian Mixtures.
+
+    Args:
+        wayareas (GaussianMixture): desired target distributions, see
+            :py:class:`gasur.estimator.GaussianMixture`
+        safety_factor (float): overbounding saftey factor when calculating the
+            radius of influence for the activation function (default: 1).
+        y_ref (float): Reference point on the sigmoid, must be less than 1
+            (default: 0.9)
+
+    Raises:
+        ValueError: if y_ref is greater than 1
+
+    Attributes:
+        targets (GaussianMixture): desired target distributions, see
+            :py:class:`gasur.estimator.GaussianMixture`
+        safety_factor (float): overbounding saftey factor when calculating the
+            radius of influence for the activation function.
+        y_ref (float): Reference point on the sigmoid, must be less than 1
+    """
+    def __init__(self, wayareas=None, safety_factor=1, y_ref=0.9, **kwargs):
+        if wayareas is None:
+            wayareas = GaussianMixture()
+        self.targets = wayareas
+        self.safety_factor = safety_factor
+        if y_ref >= 1:
+            raise ValueError('Reference point must be less than 1')
+        self.y_ref = y_ref
+        super().__init__(**kwargs)
+
+    def density_based_cost(self, obj_states, obj_weights, obj_covariances,
+                           **kwargs):
+        r"""Implements the density based cost function.
+
+        Implements the following cost function based on the difference between
+        Gaussian mixtures, with additional terms to improve convergence when
+        far from the targets.
+
+        .. math::
+            J &= \sum_{k=1}^{T} 10 N_g\sigma_{g,max}^2 \left( \sum_{j=1}^{N_g}
+                    \sum_{i=1}^{N_g} w_{g,k}^{(j)} w_{g,k}^{(i)}
+                    \mathcal{N}( \mathbf{m}^{(j)}_{g,k}; \mathbf{m}^{(i)}_{g,k},
+                    P^{(j)}_{g, k} + P^{(i)}_{g, k} ) \right. \\
+                &- \left. 20 \sigma_{d, max}^2 N_d \sum_{j=1}^{N_d} \sum_{i=1}^{N_g}
+                    w_{d,k}^{(j)} w_{g,k}^{(i)} \mathcal{N}(
+                    \mathbf{m}^{(j)}_{d, k}; \mathbf{m}^{(i)}_{g, k},
+                    P^{(j)}_{d, k} + P^{(i)}_{g, k} ) \right) \\
+                &+ \sum_{j=1}^{N_d} \sum_{i=1}^{N_d} w_{d,k}^{(j)}
+                    w_{d,k}^{(i)} \mathcal{N}( \mathbf{m}^{(j)}_{d,k};
+                    \mathbf{m}^{(i)}_{d,k}, P^{(j)}_{d, k} + P^{(i)}_{d, k} ) \\
+                &+ \alpha \sum_{j=1}^{N_d} \sum_{i=1}^{N_g} w_{d,k}^{(j)}
+                    w_{g,k}^{(i)} \ln{\mathcal{N}( \mathbf{m}^{(j)}_{d,k};
+                    \mathbf{m}^{(i)}_{g,k}, P^{(j)}_{d, k} + P^{(i)}_{g, k} )}
+
+        Args:
+            obj_states (N x Ng numpy array): Matrix of all the object's states,
+                each column is one objects state
+            obj_weights (list of floats): weight of each state, same order as
+                obj_states
+            obj_covariances (list): list of N x N numpy arrays representing
+                each states covariance matrix
+
+        Returns:
+            (float): density based cost
+        """
+        target_center = self.target_center()
+        num_targets = len(self.targets.means)
+        num_objects = obj_states.shape[1]
+        num_states = obj_states.shape[0]
+
+        # find radius of influence and shift
+        max_dist = 0
+        for tar_mean in self.targets.means:
+            diff = tar_mean - target_center
+            dist = np.sqrt(diff.T @ diff).squeeze()
+            if dist > max_dist:
+                max_dist = dist
+        radius_of_influence = self.safety_factor * max_dist
+        shift = radius_of_influence + np.log(1/self.y_ref - 1)
+
+        # get actiavation term
+        max_dist = 0
+        for ii in range(0, num_objects):
+            diff = target_center - obj_states[:, [ii]]
+            dist = np.sqrt(diff.T @ diff).squeeze()
+            if dist > max_dist:
+                max_dist = dist
+        activator = 1 / (1 + np.exp(-(max_dist - shift)))
+
+        # get maximum variance
+        max_var_obj = max(map(lambda x: float(np.max(np.diag(x))),
+                              obj_covariances))
+        max_var_target = max(map(lambda x: float(np.max(np.diag(x))),
+                                 self.targets.covariances))
+
+        # Loop for all double summation terms
+        sum_obj_obj = 0
+        sum_obj_target = 0
+        sum_target_target = 0
+        quad = 0
+        for outer_obj in range(0, num_objects):
+            # object to object
+            for inner_obj in range(0, num_objects):
+                comb_cov = obj_covariances[outer_obj] \
+                            + obj_covariances[inner_obj]
+                sum_obj_obj += obj_weights[outer_obj] \
+                    * obj_weights[inner_obj] \
+                    * mvn.pdf(obj_states[:, outer_obj],
+                              mean=obj_states[:, inner_obj],
+                              cov=comb_cov)
+
+            # object to target and quadratic
+            for ii in range(0, num_targets):
+                # object to target
+                comb_cov = obj_covariances[outer_obj] \
+                    + self.targets.covariances[ii]
+                sum_obj_target += obj_weights[outer_obj] \
+                    * self.targets.weights[ii] \
+                    * mvn.pdf(obj_states[:, outer_obj],
+                              mean=self.targets.means[ii].squeeze(),
+                              cov=comb_cov)
+
+                # quadratic
+                diff = obj_states[:, [outer_obj]] - self.targets.means[ii]
+                log_term = np.log((2*np.pi)**(-0.5*num_states)
+                                  / np.sqrt(la.det(comb_cov))) \
+                    - 0.5 * diff.T @ la.inv(comb_cov) @ diff
+                quad += (obj_weights[outer_obj] * self.targets.weights[ii]
+                         * log_term).squeeze()
+
+        # target to target
+        for outer in range(0, num_targets):
+            for inner in range(0, num_targets):
+                comb_cov = self.targets.covariances[outer] \
+                    + self.targets.covariances[inner]
+                sum_target_target += self.targets.weights[outer] \
+                    * self.targets.weights[inner] \
+                    * mvn.pdf(self.targets.means[outer].squeeze(),
+                              mean=self.targets.means[inner].squeeze(),
+                              cov=comb_cov)
+
+        return 10 * num_objects * max_var_obj * (sum_obj_obj - 2
+                                                 * max_var_target * num_targets
+                                                 * sum_obj_target) \
+            + sum_target_target + activator * quad
+
+    def convert_waypoints(self, waypoints):
+        """Converts waypoints into wayareas.
+
+        Args:
+            waypoints (list): each element is a N x 1 numpy array representing
+                a desired state
+
+        Returns:
+            (GaussianMixture): desired wayareas, see :py:class:`gasur.estimator.GaussianMixture`
+
+        Todo:
+            Ensure the calculated covariance is full rank and positive
+            semi-definite
+        """
+        center_len = waypoints[0].size
+        num_waypoints = len(waypoints)
+        combined_centers = np.zeros((center_len, num_waypoints+1))
+
+        # get overall center, build collection of centers
+        for ii in range(0, num_waypoints):
+            combined_centers[:, [ii]] = waypoints[ii].reshape((center_len, 1))
+            combined_centers[:, [num_waypoints]] += combined_centers[:, [ii]]
+        combined_centers[:, [num_waypoints]] = combined_centers[:, [-1]] \
+            / num_waypoints
+
+        # find directions to each point
+        directions = np.zeros((center_len, num_waypoints + 1, num_waypoints
+                               + 1))
+        for start_point in range(0, num_waypoints + 1):
+            for end_point in range(0, num_waypoints + 1):
+                directions[:, start_point, end_point] = \
+                    (combined_centers[:, end_point]
+                     - combined_centers[:, start_point])
+
+        def find_principal_components(data):
+            num_samps = data.shape[0]
+            num_feats = data.shape[1]
+
+            mean = np.sum(data, 0) / num_samps
+            covars = np.zeros((num_feats, num_feats))
+            for ii in range(0, num_feats):
+                for jj in range(0, num_feats):
+                    acc = 0
+                    for samp in range(0, num_samps):
+                        acc += (data[samp, ii] - mean[ii]) \
+                                * (data[samp, jj] - mean[jj])
+                    covars[ii, jj] = acc / num_samps
+            (w, comps) = la.eig(covars)
+            inds = np.argsort(w)[::-1]
+            return comps[:, inds].T
+
+        def find_largest_proj_dist(new_dirs, old_dirs):
+            vals = np.zeros(new_dirs.shape[0])
+            for ii in range(0, new_dirs.shape[1]):
+                for jj in range(0, old_dirs.shape[1]):
+                    proj = np.abs(new_dirs[:, [ii]].T @ old_dirs[:, [jj]])
+                    if proj > vals[ii]:
+                        vals[ii] = proj
+            return np.diag(vals)
+
+        weight = 1 / num_waypoints
+        wayareas = GaussianMixture()
+        for wp_ind in range(0, num_waypoints):
+            center = waypoints[wp_ind].reshape((center_len, 1))
+
+            sample_data = combined_centers.copy()
+            sample_data = np.delete(sample_data, wp_ind, 1)
+            sample_dirs = directions[:, wp_ind, :].squeeze()
+            sample_dirs = np.delete(sample_dirs, wp_ind, 1)
+            comps = find_principal_components(sample_data.T)
+            vals = find_largest_proj_dist(comps, sample_dirs)
+
+            covariance = comps @ vals @ la.inv(comps)
+
+            wayareas.means.append(center)
+            wayareas.covariances.append(covariance)
+            wayareas.weights.append(weight)
+        return wayareas
+
+    def update_targets(self, new_waypoints, **kwargs):
+        """Updates the target list.
+
+        Args:
+            new_waypoints (list): each element is a N x 1 numpy array
+                representing at target state
+
+        Keyword Args:
+            reset (bool): Removes the current targets if true, else appends
+                new_waypoints to the current set of targets
+        """
+        reset = kwargs.get('reset', False)
+        if not reset:
+            for m in self.targets.means:
+                new_waypoints.append(m)
+        # clear way areas and add new ones
+        self.targets = GaussianMixture()
+        self.targets = self.convert_waypoints(new_waypoints)
+
+    def target_center(self):
+        """Calculates the mean of the overall target distribution.
+
+        Returns:
+            (N x 1 numpy array): the mean of the target states
+        """
+        summed = np.zeros(self.targets.means[0].shape)
+        num_tars = len(self.targets.means)
+        for ii in range(0, num_tars):
+            summed += self.targets.means[ii]
+        return summed / num_tars
+
+
+class GaussianObject:
+    """Data structure for an object defined by a Gaussian distribution.
+
+    This defines the attributes for a general object used in
+    Gaussian based guidance algorithms.
+
+    Keyword Args:
+        dyn_functions (list of functions): list of dynamics functions, 1 per
+            state, same order as state variables, must take in x, u
+        inv_dyn_functions (list of functions): list of inverse dynamics
+            functions, 1 per state, same order as state variables, must take
+            in x, u
+        means (Nh x N numpy array): the state at each timestep of the time
+            horizon
+        ctrl_inputs (Nh x Nu numpy array): control input at each timestep of
+            the time horizon
+        feedforward (list): list of numpy arrays of the Nu x 1 feedforward
+            gain, one for each timestep of the time horizon
+        feedback (list): list of numpy arrays of the Nu x N feedforward
+            gain, one for each timestep of the time horizon
+        cost_to_come_mat (list): list of numpy arras of the N x N cost-to-come
+            matrix, one for wach timestep of the time horizon
+        cost_to_come_vec (list): list of numpy arras of the N x 1 cost-to-come
+            vector, one for wach timestep of the time horizon
+        cost_to_go_mat (list): list of numpy arras of the N x N cost-to-go
+            matrix, one for wach timestep of the time horizon
+        cost_to_go_mat (list): list of numpy arras of the N x 1 cost-to-go
+            vector, one for wach timestep of the time horizon
+        covariance (N x N numpy array): covariance matrix
+        weight (float): weight of the Gaussian in the mixture, must be greater
+            than 0
+        ctrl_nom (Nu x 1 numpy array): nominal control input
+
+    Raises:
+        ValueError: if weight is less than or equal to 0
+
+    Attributes:
+        dyn_functions (list of functions): list of dynamics functions, 1 per
+            state, same order as state variables, must take in x, u
+        inv_dyn_functions (list of functions): list of inverse dynamics
+            functions, 1 per state, same order as state variables, must take
+            in x, u
+        means (Nh x N numpy array): the state at each timestep of the time
+            horizon
+        ctrl_inputs (Nh x Nu numpy array): control input at each timestep of
+            the time horizon
+        feedforward (list): list of numpy arrays of the Nu x 1 feedforward
+            gain, one for each timestep of the time horizon
+        feedback (list): list of numpy arrays of the Nu x N feedforward
+            gain, one for each timestep of the time horizon
+        cost_to_come_mat (list): list of numpy arras of the N x N cost-to-come
+            matrix, one for wach timestep of the time horizon
+        cost_to_come_vec (list): list of numpy arras of the N x 1 cost-to-come
+            vector, one for wach timestep of the time horizon
+        cost_to_go_mat (list): list of numpy arras of the N x N cost-to-go
+            matrix, one for wach timestep of the time horizon
+        cost_to_go_vec (list): list of numpy arras of the N x 1 cost-to-go
+            vector, one for wach timestep of the time horizon
+        covariance (N x N numpy array): covariance matrix, only 1 for entire
+            time horizon
+        weight (float): weight of the Gaussian in the mixture, must be greater
+            than 0
+        ctrl_nom (Nu x 1 numpy array): nominal control input
+    """
+
+    def __init__(self, **kwargs):
+        self.dyn_functions = kwargs.get('dyn_functions', [])
+        self.inv_dyn_functions = kwargs.get('inv_dyn_functions', [])
+
+        # each timestep is a row
+        self.means = kwargs.get('means', np.array([[]]))
+        self.ctrl_inputs = kwargs.get('control_input', np.array([[]]))
+
+        # lists of arrays
+        self.feedforward_lst = kwargs.get('feedforward', [])
+        self.feedback_lst = kwargs.get('feedback', [])
+        self.cost_to_come_mat = kwargs.get('cost_to_come_mat', [])
+        self.cost_to_come_vec = kwargs.get('cost_to_come_vec', [])
+        self.cost_to_go_mat = kwargs.get('cost_to_go_mat', [])
+        self.cost_to_go_vec = kwargs.get('cost_go_vec', [])
+
+        # only 1 for entire trajectory
+        self.covariance = kwargs.get('covariance', np.array([[]]))
+        self.weight = kwargs.get('weight', 0)
+        if self.weight <= 0:
+            raise ValueError('Weight must be greater than 0')
+        self.ctrl_nom = kwargs.get('ctrl_nom', np.array([[]]))
+
 
 
 class ELQRGaussian(BaseELQR, DensityBased):
