@@ -6,6 +6,7 @@ for RFS guidance related algorithms.
 import numpy as np
 import scipy.linalg as la
 from scipy.stats import multivariate_normal as mvn
+from scipy.stats.distributions import chi2
 
 from gasur.estimator import GaussianMixture
 from gncpy.math import get_hessian, get_jacobian
@@ -353,7 +354,7 @@ class GaussianObject:
 
         # only 1 for entire trajectory
         self.covariance = kwargs.get('covariance', np.array([[]]))
-        self.weight = kwargs.get('weight', 0)
+        self.weight = kwargs.get('weight', np.nan)
         if self.weight <= 0:
             raise ValueError('Weight must be greater than 0')
         self.ctrl_nom = kwargs.get('ctrl_nom', np.array([[]]))

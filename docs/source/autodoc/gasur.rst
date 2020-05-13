@@ -12,7 +12,6 @@ Subpackages
 .. toctree::
    :maxdepth: 4
 
-   gasur.guidance
    gasur.utilities
 
 Submodules
@@ -22,3 +21,4 @@ Submodules
    :maxdepth: 4
 
    gasur.estimator
+   gasur.guidance

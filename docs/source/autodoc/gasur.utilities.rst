@@ -5,11 +5,3 @@ gasur.utilities package
    :members:
    :undoc-members:
    :show-inheritance:
-
-Submodules
-----------
-
-.. toctree::
-   :maxdepth: 4
-
-   gasur.utilities.math
