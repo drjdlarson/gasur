@@ -8,7 +8,13 @@ import pytest
 import numpy as np
 
 from gasur.estimator import GaussianMixture
-from gasur.guidance.base import GaussianObject
+from gasur.guidance import GaussianObject
+
+
+@pytest.fixture(scope="session")
+def Q():
+    return 10**-3 * np.eye(2)
+
 
 @pytest.fixture(scope="function")
 def wayareas():
