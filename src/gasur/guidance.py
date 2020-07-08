@@ -8,7 +8,7 @@ import scipy.linalg as la
 from scipy.stats import multivariate_normal as mvn
 from scipy.stats.distributions import chi2
 
-from gasur.estimator import GaussianMixture
+from gasur.utilities.distributions import GaussianMixture
 from gncpy.math import get_hessian, get_jacobian
 from gncpy.control import BaseELQR
 

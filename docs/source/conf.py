@@ -59,6 +59,7 @@ autodoc_default_flags = [
 ]
 autosummary_generate = True
 autodoc_member_order = 'groupwise'
+add_module_names = False
 
 # Todo configuration
 todo_include_todos = True

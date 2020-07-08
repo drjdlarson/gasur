@@ -12,7 +12,7 @@ Subpackages
 .. toctree::
    :maxdepth: 4
 
-   gasur.filters
+   gasur.swarm_estimator
    gasur.utilities
 
 Submodules
@@ -21,5 +21,4 @@ Submodules
 .. toctree::
    :maxdepth: 4
 
-   gasur.estimator
    gasur.guidance
