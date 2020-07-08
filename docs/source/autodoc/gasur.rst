@@ -12,6 +12,7 @@ Subpackages
 .. toctree::
    :maxdepth: 4
 
+   gasur.filters
    gasur.utilities
 
 Submodules
