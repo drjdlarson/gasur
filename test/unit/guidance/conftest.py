@@ -7,7 +7,7 @@ Created on Wed Apr 22 18:55:41 2020
 import pytest
 import numpy as np
 
-from gasur.estimator import GaussianMixture
+from gasur.utilities.distributions import GaussianMixture
 from gasur.guidance import GaussianObject
 
 
