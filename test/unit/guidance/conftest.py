@@ -36,7 +36,7 @@ def wayareas():
 
     weights = [0.25, 0.25, 0.25, 0.25]
 
-    return GaussianMixture(means, covs, weights)
+    return GaussianMixture(means=means, covariances=covs, weights=weights)
 
 
 @pytest.fixture(scope="function")

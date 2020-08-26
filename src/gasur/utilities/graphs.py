@@ -3,37 +3,40 @@ import numpy as np
 from warnings import warn
 
 
-def k_shortest(self, log_cost, k):
+def k_shortest(log_cost_in, k):
     if k == 0:
         paths = []
         costs = []
         return (paths, costs)
+    log_cost = np.squeeze(log_cost_in)
     num_states = log_cost.size
     cost_mat = np.zeros((num_states, num_states))
 
     # sort in descending order and save index
     sort_inds = np.argsort(log_cost)
-    np.sort(log_cost)
-    log_cost = log_cost[::-1]
+    sort_inds = sort_inds[::-1]
+    log_cost = [log_cost[ii] for ii in sort_inds]
 
     for ii in range(0, num_states):
         if ii >= 1:
-            cost_mat[0:ii-1, ii] = log_cost[ii]
+            cost_mat[0:ii, ii] = log_cost[ii]
 
     cost_pad = np.zeros((num_states + 2, num_states + 2))
-    cost_pad[0, 1:-2] = log_cost
+    cost_pad[0, 1:-1] = log_cost
     cost_pad[0, -1] = np.finfo(float).eps
-    cost_pad[1:-2, -1] = np.finfo(float).eps
-    cost_pad[1:-2, 1:-2] = cost_mat
+    cost_pad[1:-1, -1] = np.finfo(float).eps
+    cost_pad[1:-1, 1:-1] = cost_mat
 
-    (paths, costs) = __k_short_helper(cost_pad, 1, num_states + 2, k)
+    (paths, costs) = __k_short_helper(cost_pad, 0, num_states + 1, k)
 
     for p in range(0, len(paths)):
-        if (paths[p] == np.array([1, num_states + 2])).all():
+        if np.array_equal(np.array(paths[p]), np.array([0, num_states + 1])):
             paths[p] = []
         else:
-            paths[p] = paths[p][1:-2] - 1
-            paths[p] = sort_inds(paths[p])
+            sub = paths[p][1:-1]
+            for ii in range(0, len(sub)):
+                sub[ii] = sub[ii] - 1
+            paths[p] = [sort_inds[ii] for ii in sub]
 
     return (paths, costs)
 
@@ -43,17 +46,17 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
         msg = 'Source or destination nodes not part of cost matrix'
         warn(msg, RuntimeWarning)
         return ([], [])
-    k = 1
+
     (cost, path, _) = bfm_shortest_path(net_cost_mat, src, dst)
     if len(path) == 0:
         return ([], [])
 
     P = []
     P.append((path, cost))
-    cur_p = 1
+    cur_p = 0
 
     X = []
-    X.append((len(P), path, cost))
+    X.append((len(P) - 1, path, cost))
 
     S = []
     S.append(path[0])
@@ -63,13 +66,12 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
     tot_costs = []
     tot_costs.append(cost)
 
-    while k < k_paths and not(len(X) == 0):
-        new_X = X
+    while (len(shortest_paths) < k_paths) and (len(X) != 0):
         for ii in range(0, len(X)):
             if X[ii][0] == cur_p:
-                del new_X[ii]
-        X = new_X
-        P_ = P[cur_p][0]
+                del X[ii]
+                break
+        P_ = P[cur_p][0].copy()
 
         w = S[cur_p]
         for ii in range(0, len(P_)):
@@ -77,8 +79,8 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
                 w_ind_in_path = ii
 
         for ind_dev_vert in range(w_ind_in_path, len(P_) - 1):
-            temp_cost_mat = net_cost_mat
-            for ii in range(0, ind_dev_vert - 2):
+            temp_cost_mat = net_cost_mat.copy()
+            for ii in range(0, ind_dev_vert - 1):
                 v = P_(ii)
                 temp_cost_mat[v, :] = np.inf
                 temp_cost_mat[:, v] = np.inf
@@ -86,27 +88,27 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
             sp_same_sub_p = []
             sp_same_sub_p.append(P_)
             for sp in shortest_paths:
-                if len(sp) >= ind_dev_vert:
-                    if P_[0:ind_dev_vert] == sp[0:ind_dev_vert]:
+                if len(sp) > ind_dev_vert:
+                    if np.array_equal(np.array(P_[0:ind_dev_vert + 1]),
+                                      np.array(sp[0:ind_dev_vert + 1])):
                         sp_same_sub_p.append(sp)
             v_ = P_[ind_dev_vert]
             for sp in sp_same_sub_p:
                 nxt = sp[ind_dev_vert + 1]
                 temp_cost_mat[v_, nxt] = np.inf
 
-            sub_P = P_[0:ind_dev_vert]
+            sub_P = P_[0:ind_dev_vert+1]
             cost_sub_P = 0
-            for ii in range(0, len(sub_P) - 2):
+            for ii in range(0, len(sub_P) - 1):
                 cost_sub_P += net_cost_mat[sub_P[ii], sub_P[ii + 1]]
 
             (c, dev_p, _) = bfm_shortest_path(temp_cost_mat, P_[ind_dev_vert],
                                               dst)
             if len(dev_p) > 0:
-                tmp_path = sub_P[0:-2]
-                tmp_path.append(dev_p)
+                tmp_path = sub_P[0:-2] + dev_p
                 P.append((tmp_path, cost_sub_P + c))
                 S.append(P_[ind_dev_vert])
-                X.append((len(P), P[-1][0], P[-1][1]))
+                X.append((len(P) - 1, P[-1][0], P[-1][1]))
 
         if len(X) > 0:
             shortest_x_cost = X[0][2]
@@ -117,7 +119,6 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
                     shortest_x_cost = X[ii][2]
 
             cur_p = shortest_x
-            k += 1
             shortest_paths.append(P[cur_p][0])
             tot_costs.append(P[cur_p][1])
 
@@ -175,10 +176,11 @@ def __bfm_helper(G, r):
         # and intializes the shortest path parent-pointer and distance
         # arrays, p and D.
         # Derek O'Connor, 21 Jan 2012
-        (tail, head) = np.nonzero(G >= np.finfo(float).eps)
+        inds = np.argwhere(G.T >= np.finfo(float).eps)
+        tail = inds[:, 1]
+        head = inds[:, 0]
         W = G[tail, head]
-        sort_inds = np.argsort(W)
-        sort_inds = sort_inds[::-1]
+        sort_inds = np.lexsort((tail, head))
         tail = [tail[ii] for ii in sort_inds]
         head = [head[ii] for ii in sort_inds]
         W = [W[ii] for ii in sort_inds]
