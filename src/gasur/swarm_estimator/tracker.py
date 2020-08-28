@@ -4,6 +4,7 @@ import abc
 from gncpy.filters import BayesFilter
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture
+from gasur.utilities.graphs import k_shortest
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -104,7 +105,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             birth_tab.append(entry)
 
         # get K best hypothesis, and their index in the lookup table
-        (paths, hyp_cost) = self.k_shortest_pred(log_cost, self.req_births)
+        (paths, hyp_cost) = k_shortest(log_cost, self.req_births)
 
         # calculate association probabilities for birth hypothesis
         tot_cost = 0
@@ -153,7 +154,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 log_cost = [-np.log(cost)] * hyp.num_tracks
                 k = np.round(self.req_surv * np.sqrt(hyp.assoc_prob)
                              / sum_sqrt_w)
-                (paths, hyp_cost) = self.k_shortest_pred(log_cost, k)
+                (paths, hyp_cost) = k_shortest(log_cost, k)
 
                 for (p, c) in zip(paths, hyp_cost):
                     new_hyp = self._HypothesisHelper()
@@ -194,7 +195,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         for track in self._track_tab:
             up_tab.append(track)
             up_tab[-1].assoc_hist.append(GaussianMixture())
-            
+
+        assert 0
+
+    def extract_states(self, **kwargs):
         assert 0
 
     def calc_card_dist(self, hyp_lst):
