@@ -17,11 +17,11 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         birth_terms (list): List of terms in the birth model
     """
     def __init__(self, **kwargs):
-        self.filter = BayesFilter()
+        self.filter = None
         self.prob_detection = 1
         self.prob_survive = 1
         self.birth_terms = []
-        super.__init__(**kwargs)
+        super().__init__(**kwargs)
 
     @property
     def prob_miss_detection(self):
@@ -87,7 +87,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self.req_surv = 0  # filter.H_surv
 
         self._track_tab = []  # list of _TabEntry objects
-        self._hypotheses = []  # list of _HypothesisHelper objects
+
+        hyp0 = self._HypothesisHelper()
+        hyp0.assoc_prob = 1
+        hyp0.track_set = []
+        self._hypotheses = [hyp0]  # list of _HypothesisHelper objects
+
         self._card_dist = []  # probability of having index # as cardinality
         super().__init__(**kwargs)
 
@@ -202,6 +207,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         assert 0
 
     def calc_card_dist(self, hyp_lst):
+        if len(hyp_lst) == 0:
+            return 0
+
         card_dist = []
         for ii in range(0, max(map(lambda x: x.num_tracks, hyp_lst))):
             card = 0

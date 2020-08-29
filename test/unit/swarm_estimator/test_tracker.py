@@ -52,14 +52,14 @@ class TestGeneralizedLabeledMultiBernoulli:
         glmb.prob_detection = 0.98
         glmb.prob_survive = 0.99
 
-        mu = [np.array([-1500, 0, 250, 0, 0]).reshape((3, 1))]
+        mu = [np.array([-1500, 0, 250, 0, 0]).reshape((5, 1))]
         cov = [np.diag(np.array([50, 50, 50, 50, 6 * (np.pi / 180)]))]
         gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
-        mu = [np.array([-250, 0, 1000, 0, 0])]
+        mu = [np.array([-250, 0, 1000, 0, 0]).reshape((5, 1))]
         gm1 = GaussianMixture(means=mu, covariances=cov, weights=[1])
-        mu = [np.array([250, 0, 750, 0, 0])]
+        mu = [np.array([250, 0, 750, 0, 0]).reshape((5, 1))]
         gm2 = GaussianMixture(means=mu, covariances=cov, weights=[1])
-        mu = [np.array([1000, 0, 1500, 0, 0])]
+        mu = [np.array([1000, 0, 1500, 0, 0]).reshape((5, 1))]
         gm3 = GaussianMixture(means=mu, covariances=cov, weights=[1])
 
         glmb.birth_terms = [(gm0, 0.02), (gm1, 0.02), (gm2, 0.03), (gm3, 0.03)]
@@ -68,4 +68,6 @@ class TestGeneralizedLabeledMultiBernoulli:
 
         glmb.predict(time_step=0, dt=dt)
 
-        assert 0
+        # check that code ran with no errors, values are all private at this
+        # point
+        assert 1
