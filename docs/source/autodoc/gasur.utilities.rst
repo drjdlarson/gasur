@@ -13,3 +13,4 @@ Submodules
    :maxdepth: 4
 
    gasur.utilities.distributions
+   gasur.utilities.graphs

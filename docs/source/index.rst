@@ -11,6 +11,7 @@ Welcome to GASUR's documentation!
    :caption: Contents:
 
    autodoc/modules
+   toolchain
    References
    license
 

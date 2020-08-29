@@ -1,5 +1,6 @@
 import numpy as np
 import numpy.testing as test
+from scipy.linalg import block_diag
 
 import gncpy.filters as filters
 import gasur.swarm_estimator.tracker as trckr
@@ -9,28 +10,36 @@ from gasur.utilities.distributions import GaussianMixture
 class TestGeneralizedLabeledMultiBernoulli:
     def test_predict(self):
         dt = 1
+
+        # setup filter for coordinated turn model
         filt = filters.ExtendedKalmanFilter()
-        filt.cov = []
         filt.meas_mat = []
         filt.meas_noise = []
-        filt.proc_map = []
-        filt.proc_cov = []
+        sig_w = 15
+        sig_u = np.pi / 180
+        G = np.array([[dt**2, 0, 0],
+                      [dt, 0, 0],
+                      [0, dt**2, 0],
+                      [0, dt, 0],
+                      [0, 0, 1]])
+        Q = block_diag(sig_w**2 * np.eye(2), np.array([[sig_u**2]]))
+        filt.set_proc_noise(mat=G @ Q @ G.T)
 
         # returns x_dot
         def f0(x, u, **kwargs):
-            return x[2]
-
-        # returns y_dot
-        def f1(x, u, **kwargs):
-            return x[3]
+            return x[1]
 
         # returns x_dot_dot
-        def f2(x, u, **kwargs):
+        def f1(x, u, **kwargs):
             return -x[4] * x[3]
+
+        # returns y_dot
+        def f2(x, u, **kwargs):
+            return x[3]
 
         # returns y_dot_dot
         def f3(x, u, **kwargs):
-            return x[4] * x[2]
+            return x[4] * x[1]
 
         # returns omega_dot
         def f4(x, u, **kwargs):
