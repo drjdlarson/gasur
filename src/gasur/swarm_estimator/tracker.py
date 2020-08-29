@@ -4,7 +4,7 @@ import abc
 from gncpy.filters import BayesFilter
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture
-from gasur.utilities.graphs import k_shortest
+from gasur.utilities.graphs import k_shortest, murty
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -21,6 +21,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.prob_detection = 1
         self.prob_survive = 1
         self.birth_terms = []
+        self.clutter_rate = 0
+        self.clutter_den = 0
         super().__init__(**kwargs)
 
     @property
@@ -85,6 +87,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     def __init__(self, **kwargs):
         self.req_births = 0  # filter.H_bth
         self.req_surv = 0  # filter.H_surv
+        self.req_upd = 0  # filter.H_upd
 
         self._track_tab = []  # list of _TabEntry objects
 
@@ -195,13 +198,90 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     def correct(self, **kwargs):
         meas = kwargs['meas']
-        num_meas = len(meas)
-        up_tab = []
-        for track in self._track_tab:
-            up_tab.append(track)
-            up_tab[-1].assoc_hist.append(GaussianMixture())
 
-        assert 0
+        # gate by tracks
+        ###TODO: implement
+
+        num_meas = len(meas)
+
+        # missed detection tracks
+        num_pred = len(self._track_tab)
+        up_tab = [None] * (num_meas + 1) * num_pred
+        for ii, track in enumerate(self._track_tab):
+            up_tab[ii] = track
+            up_tab[ii].assoc_hist.append(GaussianMixture())
+
+        # measurement updated tracks
+        all_cost_m = np.zeros((num_pred, num_meas))
+        for emm, z in enumerate(meas):
+            for ii, ent in enumerate(self._track_tab):
+                s_to_ii = num_pred * emm + ii
+                up_tab[s_to_ii].probDensity.means = []
+                up_tab[s_to_ii].probDensity.covariances = []
+                up_tab[s_to_ii].probDensity.weights = []
+                for jj in range(0, ent.probDensity.means):
+                    self.filter.cov = ent.probDensity.covariances[jj]
+                    state = ent.probDensity.means[jj]
+                    (mean, qz) = self.filter.correct(meas=z, cur_state=state,
+                                                     **kwargs)
+                    cov = self.filter.cov
+                    w = qz @ ent.probDensity.weights + np.finfo(float).eps
+                    up_tab[s_to_ii].probDensity.means.append(mean)
+                    up_tab[s_to_ii].probDensity.covariances.append(cov)
+                    up_tab[s_to_ii].probDensity.weights.append(w)
+                tmp_sum = sum(up_tab[s_to_ii].probDensity.weights)
+                for jj in range(0, len(up_tab[s_to_ii].probDensity.weights)):
+                    up_tab[s_to_ii].probDensity.weights[jj] /= tmp_sum
+                all_cost_m[ii, emm] = tmp_sum
+
+        # component updates
+        if num_meas == 0:
+            up_hyp = []
+            for hyp in self._hypotheses:
+                hyp.assoc_prob = -self.clutter_rate + hyp.num_tracks \
+                    * np.log(self.prob_miss_detection) + np.log(hyp.assoc_prob)
+                up_hyp.append(hyp)
+        else:
+            clutter = self.clutter_rate * self.clutter_den
+            p_d_ratio = self.prob_detection / self.prob_miss_detection
+            ss_w = 0
+            for p_hyp in self._hypotheses:
+                ss_w += np.sqrt(p_hyp.assoc_prob)
+            for p_hyp in self._hypotheses:
+                if p_hyp.num_tracks == 0:  # all clutter
+                    new_hyp = self._HypothesisHelper()
+                    new_hyp.assoc_prob = -self.clutter_rate + num_meas \
+                        * np.log(clutter) + np.log(p_hyp.assoc_prob)
+                    new_hyp.track_set = p_hyp.track_set
+                    up_hyp.append(new_hyp)
+
+                else:
+                    cost_m = p_d_ratio * all_cost_m[p_hyp.track_set, :] \
+                        / clutter
+                    neg_log = -np.log(cost_m)
+                    m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
+                                 / ss_w)
+                    [assigns, costs] = murty(neg_log, m)
+
+                    for (a, c) in zip(assigns, costs):
+                        new_hyp = self._HypothesisHelper()
+                        new_hyp.assoc_prob = -self.clutter_rate + num_meas \
+                            * np.log(clutter) + p_hyp.num_tracks \
+                            * np.log(self.prob_miss_detection) \
+                            + np.log(p_hyp.assoc_prob) + c
+                        lst1 = [num_pred * x for x in a]
+                        lst2 = p_hyp.track_set
+                        new_hyp.track_set = [sum(x) for x in zip(lst1, lst2)]
+                        up_hyp.append(new_hyp)
+
+        lse = log_sum_exp([x.assoc_prob for x in up_hyp])
+        for ii in range(0, len(up_hyp)):
+            up_hyp[ii].assoc_prob = np.exp(up_hyp[ii].assoc_prob - lse)
+
+        self._track_tab = up_tab
+        self._hypotheses = up_hyp
+        self._card_dist = self.calc_card_dist(self._hypotheses)
+        self.clean_updates()
 
     def extract_states(self, **kwargs):
         assert 0
@@ -230,5 +310,23 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             else:
                 new_ii = used_hash.index(h)
                 new_hyps[new_ii].assoc_prob += self._hypotheses[ii].assoc_prob
+        self._hypotheses = new_hyps
 
+    def clean_updates(self):
+        used = [0] * len(self._track_tab)
+        for hyp in self._hypotheses:
+            used[hyp.track_set] += 1
+        nnz_inds = [idx for idx, val in enumerate(used) if val != 0]
+        track_cnt = len(nnz_inds)
+
+        new_inds = [0] * len(self._track_tab)
+        for (ii, v) in zip(nnz_inds, [ii for ii in range(0, track_cnt)]):
+            new_inds[ii] = v
+
+        new_tab = [self._track_tab[ii] for ii in nnz_inds]
+        new_hyps = []
+        for(ii, hyp) in enumerate(self._hypotheses):
+            hyp.track_set = new_inds[hyp.track_set]
+            new_hyps.append(hyp)
+        self._track_tab = new_tab
         self._hypotheses = new_hyps

@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 import numpy.testing as test
 from scipy.linalg import block_diag
@@ -7,6 +8,7 @@ import gasur.swarm_estimator.tracker as trckr
 from gasur.utilities.distributions import GaussianMixture
 
 
+@pytest.mark.incremental
 class TestGeneralizedLabeledMultiBernoulli:
     def test_predict(self):
         dt = 1
