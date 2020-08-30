@@ -11,8 +11,20 @@ def assign_opt(dist_mat_in):
 
     (n_rows, n_cols) = dist_mat.shape
     assign = -np.ones(n_rows, dtype=int)
-    if not(np.isfinite(dist_mat).all()) and len(np.where(dist_mat < 0)) > 0:
-        raise RuntimeError('All matrix values must be non-negative and finite')
+    if (np.isfinite(dist_mat) & (dist_mat < 0)).any():
+        raise RuntimeError('All matrix values must be non-negative')
+
+    if np.isinf(dist_mat).all():
+        return (assign, 0)
+
+    # replace any infite values with a large number
+    if np.isinf(dist_mat).any():
+        max_finite = dist_mat[np.nonzero(np.isfinite(dist_mat))].max()
+        if max_finite > 0:
+            inf_val = 10 * max_finite * n_rows * n_cols
+        else:
+            inf_val = 10
+        dist_mat[np.nonzero(np.isinf(dist_mat))] = inf_val
 
     covered_cols = [False] * n_cols
     covered_rows = [False] * n_rows
@@ -102,7 +114,7 @@ def __aop_step3(assign, dist_mat, star_mat, prime_mat, covered_cols,
 
                         star_col = 0
                         for ii in range(0, n_cols):
-                            if star_mat[row + n_rows * ii]:
+                            if star_mat[row, ii]:
                                 star_col = ii
                                 break
                             else:
@@ -132,7 +144,7 @@ def __aop_step4(assign, dist_mat, star_mat, prime_mat, covered_cols,
     star_row = 0
     for ii in range(0, n_rows):
         star_row = ii
-        if star_mat[ii + n_rows * star_col]:
+        if star_mat[ii, star_col]:
             break
 
     while star_row < n_rows:
@@ -151,7 +163,7 @@ def __aop_step4(assign, dist_mat, star_mat, prime_mat, covered_cols,
 
         star_col = prime_col
         for ii in range(0, n_rows):
-            if star_mat[ii + n_rows * star_col]:
+            if star_mat[ii, star_col]:
                 star_row = ii
                 break
             else:

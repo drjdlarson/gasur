@@ -214,18 +214,21 @@ def __bfm_helper(G, r):
 
 
 def murty_m_best(cost_mat, m):
+    if len(cost_mat.shape) == 1 or len(cost_mat.shape) > 2:
+        raise RuntimeError('Cost matrix must be 2D array')
+
     if m == 0:
         return ([], [])
     blk = -np.log(np.ones((cost_mat.shape[0], cost_mat.shape[0])))
 
-    cm = block_diag(cost_mat, blk)
+    cm = np.hstack((cost_mat, blk))
     x = cm.min()
     cm = cm - x
 
     (assigns, costs) = __murty_helper(cm, m)
 
     for (ii, a) in enumerate(assigns):
-        costs[ii] += len(np.where(a >= 0))
+        costs[ii] += x * np.count_nonzero(a >= 0)
 
     # remove extra entries
     assigns = assigns[:, 0:cost_mat.shape[0]]
@@ -248,7 +251,7 @@ def __murty_helper(p0, m):
     # preallocate arrays
     blk_sz = 1000
     ans_lst_P = np.zeros((n_rows, n_cols, blk_sz))
-    ans_lst_S = np.zeros((n_rows, blk_sz))
+    ans_lst_S = np.zeros((n_rows, blk_sz), dtype=int)
     ans_lst_C = np.nan * np.ones(blk_sz)
 
     ans_lst_P[:, :, 0] = p0
@@ -271,18 +274,33 @@ def __murty_helper(p0, m):
         assigns[:, ii] = ans_lst_S[:, idx_top]
         costs[ii] = ans_lst_C[idx_top]
 
-        P_now = ans_lst_P[:, :, idx_top].squeeze()
+        P_now = ans_lst_P[:, :, idx_top]
         S_now = ans_lst_S[:, idx_top]
+#        if ii == 3:
+#            assert 0, (P_now, S_now)
+
         ans_lst_C[idx_top] = np.nan
 
         for (aw, aj) in enumerate(S_now):
             if aj >= 0:
-                P_tmp = P_now
+                P_tmp = P_now.copy()
                 if aj <= n_cols - n_rows - 1:
+#                    if ii == 2:
+#                        assert 0, (aw, aj, P_tmp)
                     P_tmp[aw, aj] = np.inf
+#                    if ii == 2:
+#                        assert 0, P_tmp
                 else:
+#                    assert 0, (aw, aj, P_tmp, n_cols, n_rows)
                     P_tmp[aw, (n_cols - n_rows):] = np.inf
+#                    assert 0, P_tmp
+#                if ii == 2:
+#                    assert 0, P_tmp
+#                try:
                 (S_tmp, C_tmp) = assign_opt(P_tmp)
+#                except Exception:
+#                    assert 0, (ii, aw, aj, P_tmp)
+
                 S_tmp = S_tmp.T
                 if (S_tmp >= 0).all():
                     # allocate more space as needed
@@ -292,7 +310,8 @@ def __murty_helper(p0, m):
                                                               blk_sz))),
                                                    axis=2)
                         ans_lst_S = np.concatenate((ans_lst_S,
-                                                    np.zeros((n_rows, blk_sz))),
+                                                    np.zeros((n_rows, blk_sz),
+                                                             dtype=int)),
                                                    axis=1)
                         ans_lst_C = np.hstack((ans_lst_C,
                                                np.nan * np.ones(blk_sz)))

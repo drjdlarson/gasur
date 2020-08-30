@@ -14,7 +14,7 @@ def test_assign_opt1():
     exp_S0 = np.array([4])
 
     test.assert_allclose(C0, exp_C0)
-    test.assert_equal(S0, exp_S0)
+    test.assert_array_equal(S0, exp_S0)
 
 
 def test_assign_opt2():
@@ -30,4 +30,19 @@ def test_assign_opt2():
     exp_S0 = np.array([6, 0])
 
     test.assert_allclose(C0, exp_C0)
-    test.assert_equal(S0, exp_S0)
+    test.assert_array_equal(S0, exp_S0)
+
+
+def test_assign_opt3():
+    P0 = np.array([[np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf,
+                    np.inf],
+                   [np.inf, 32.9419076165403, 32.9419076165403,
+                    32.9419076165403, 32.9419076165403, 32.9419076154638,
+                    np.inf, 6.82765666982308]])
+    (S0, C0) = g_sub.assign_opt(P0)
+
+    exp_C0 = 6.82765666982308
+    exp_S0 = np.array([-1, 7])
+
+    test.assert_allclose(C0, exp_C0)
+    test.assert_array_equal(S0, exp_S0)
