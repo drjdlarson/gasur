@@ -4,7 +4,7 @@ import abc
 from gncpy.filters import BayesFilter
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture
-from gasur.utilities.graphs import k_shortest, murty
+from gasur.utilities.graphs import k_shortest, murty_m_best
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -261,7 +261,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     neg_log = -np.log(cost_m)
                     m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
                                  / ss_w)
-                    [assigns, costs] = murty(neg_log, m)
+                    [assigns, costs] = murty_m_best(neg_log, m)
 
                     for (a, c) in zip(assigns, costs):
                         new_hyp = self._HypothesisHelper()
