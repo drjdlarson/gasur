@@ -14,3 +14,4 @@ Submodules
 
    gasur.utilities.distributions
    gasur.utilities.graphs
+   gasur.utilities.graphs_subroutines

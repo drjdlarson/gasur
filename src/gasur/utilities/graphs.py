@@ -276,8 +276,6 @@ def __murty_helper(p0, m):
 
         P_now = ans_lst_P[:, :, idx_top]
         S_now = ans_lst_S[:, idx_top]
-#        if ii == 3:
-#            assert 0, (P_now, S_now)
 
         ans_lst_C[idx_top] = np.nan
 
@@ -285,21 +283,10 @@ def __murty_helper(p0, m):
             if aj >= 0:
                 P_tmp = P_now.copy()
                 if aj <= n_cols - n_rows - 1:
-#                    if ii == 2:
-#                        assert 0, (aw, aj, P_tmp)
                     P_tmp[aw, aj] = np.inf
-#                    if ii == 2:
-#                        assert 0, P_tmp
                 else:
-#                    assert 0, (aw, aj, P_tmp, n_cols, n_rows)
                     P_tmp[aw, (n_cols - n_rows):] = np.inf
-#                    assert 0, P_tmp
-#                if ii == 2:
-#                    assert 0, P_tmp
-#                try:
                 (S_tmp, C_tmp) = assign_opt(P_tmp)
-#                except Exception:
-#                    assert 0, (ii, aw, aj, P_tmp)
 
                 S_tmp = S_tmp.T
                 if (S_tmp >= 0).all():
