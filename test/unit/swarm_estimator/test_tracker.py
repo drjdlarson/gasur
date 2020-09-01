@@ -53,7 +53,7 @@ class TestGeneralizedLabeledMultiBernoulli:
         glmb.prob_survive = 0.99
 
         mu = [np.array([-1500, 0, 250, 0, 0]).reshape((5, 1))]
-        cov = [np.diag(np.array([50, 50, 50, 50, 6 * (np.pi / 180)]))]
+        cov = [np.diag(np.array([50, 50, 50, 50, 6 * (np.pi / 180)]))**2]
         gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
         mu = [np.array([-250, 0, 1000, 0, 0]).reshape((5, 1))]
         gm1 = GaussianMixture(means=mu, covariances=cov, weights=[1])
@@ -81,15 +81,21 @@ class TestGeneralizedLabeledMultiBernoulli:
         filt = filters.ExtendedKalmanFilter()
 
         def meas_fnc(state, **kwargs):
-            mag = state[0]**2 + state[2]**2
+            mag = state[0, 0]**2 + state[2, 0]**2
             sqrt_mag = np.sqrt(mag)
-            mat = np.vstack((np.hstack((state[2] / mag, 0, -state[0] / mag,
-                                        0, 0)),
-                            np.hstack((state[0] / sqrt_mag, 0,
-                                       state[2] / sqrt_mag, 0, 0))))
+            mat = np.vstack((np.hstack((state[2, 0] / mag, 0,
+                                        -state[0, 0] / mag, 0, 0)),
+                            np.hstack((state[0, 0] / sqrt_mag, 0,
+                                       state[2, 0] / sqrt_mag, 0, 0))))
             return mat
 
+        def meas_mod(state, **kwargs):
+            z1 = np.arctan2(state[0, 0], state[2, 0])
+            z2 = np.sqrt(np.sum(state.flatten()**2))
+            return np.array([[z1], [z2]])
+
         filt.set_meas_mat(fnc=meas_fnc)
+        filt.set_meas_model(meas_mod)
         filt.meas_noise = np.diag([(2 * np.pi / 180)**2, 10**2])
         sig_w = 15
         sig_u = np.pi / 180
@@ -129,7 +135,7 @@ class TestGeneralizedLabeledMultiBernoulli:
         glmb.prob_survive = 0.99
 
         mu = [np.array([-1500, 0, 250, 0, 0]).reshape((5, 1))]
-        cov = [np.diag(np.array([50, 50, 50, 50, 6 * (np.pi / 180)]))]
+        cov = [np.diag(np.array([50, 50, 50, 50, 6 * (np.pi / 180)]))**2]
         gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
         mu = [np.array([-250, 0, 1000, 0, 0]).reshape((5, 1))]
         gm1 = GaussianMixture(means=mu, covariances=cov, weights=[1])
@@ -142,6 +148,8 @@ class TestGeneralizedLabeledMultiBernoulli:
         glmb.req_births = 5
         glmb.req_surv = 3000
         glmb.req_upd = 3000
+        glmb.gating_on = True
+        glmb.inv_chi2_gate = 32.2361913029694
         glmb.clutter_rate = 15
         glmb.clutter_den = 1 / (np.pi * 2000)
 
@@ -173,8 +181,8 @@ class TestGeneralizedLabeledMultiBernoulli:
         glmb.correct(meas=meas)
 
         # check only 1 time step
-        assert len(glmb.states) == 0
-        assert len(glmb.labels) == 0
+        assert len(glmb.states) == 1
+        assert len(glmb.labels) == 1
 
         # check that code ran with no errors, should have a cardinality of 0
         assert len(glmb.states[0]) == 0

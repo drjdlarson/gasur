@@ -152,3 +152,17 @@ def test_murty_m_best2():
 
     test.assert_array_equal(assigns, exp_assigns)
     test.assert_array_almost_equal(costs, exp_costs)
+
+
+def test_murty_m_best3():
+    cm = np.array([[-6.59485513, 26.11425095, -6.72357331,  8.46214993]])
+    m = 322
+
+    (assigns, costs) = graphs.murty_m_best(cm, m)
+
+    exp_assigns = np.array([3, 1, 0, 4, 2]).reshape((5, 1))
+    exp_costs = np.array([-6.72357330218789, -6.59485513523219, 0,
+                          8.46214993805601, 26.1142509467173])
+
+    test.assert_array_equal(assigns, exp_assigns)
+    test.assert_array_almost_equal(costs, exp_costs)

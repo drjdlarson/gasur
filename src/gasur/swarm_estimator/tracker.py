@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.linalg import cholesky, inv
 import abc
 from copy import deepcopy
 
@@ -89,6 +90,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self.req_births = 0  # filter.H_bth
         self.req_surv = 0  # filter.H_surv
         self.req_upd = 0  # filter.H_upd
+        self.gating_on = False
+        self.inv_chi2_gate = 0  # filter.gamma
 
         self._track_tab = []  # list of _TabEntry objects
         self._states = [] # list of lists, one per time step, inner list is all states alive at that time
@@ -131,12 +134,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         # calculate association probabilities for birth hypothesis
         tot_cost = 0
         for c in hyp_cost:
-            tot_cost = tot_cost + np.exp(-c)
+            tot_cost = tot_cost + np.exp(-c).item()
         birth_hyps = []
         for (p, c) in zip(paths, hyp_cost):
             hyp = self._HypothesisHelper()
             # NOTE: this may suffer from underflow and can be improved
-            hyp.assoc_prob = np.exp(-c) / tot_cost
+            hyp.assoc_prob = np.exp(-c).item() / tot_cost
             hyp.track_set = p
             birth_hyps.append(hyp)
 
@@ -180,7 +183,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 for (p, c) in zip(paths, hyp_cost):
                     new_hyp = self._HypothesisHelper()
                     new_hyp.assoc_prob = hyp.num_tracks \
-                        * np.log(self.prob_death) + np.log(hyp.assoc_prob) - c
+                        * np.log(self.prob_death) + np.log(hyp.assoc_prob) \
+                        - np.asscalar(c)
                     new_hyp.track_set = hyp.track_set[p]
                     surv_hyps.append(new_hyp)
 
@@ -209,14 +213,19 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._card_dist = self.calc_card_dist(self._hypotheses)
         self.clean_predictions()
         self._extract_states(**kwargs)
-#        assert 0, self._track_tab[0].probDensity.means[0]
 
     def correct(self, **kwargs):
         meas = kwargs['meas']
         del kwargs['meas']
-#        assert 0, self._track_tab[0].probDensity.means[0]
-        # gate by tracks
-        ###TODO: implement
+
+        # gate measurements by tracks
+        if self.gating_on:
+            means = []
+            covs = []
+            for ent in self._track_tab:
+                means.extend(ent.probDensity.means)
+                covs.extend(ent.probDensity.covariances)
+            meas = self.gate_meas(meas, means, covs, **kwargs)
 
         num_meas = len(meas)
 
@@ -231,11 +240,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             up_tab[ii].assoc_hist.append(None)
 
         # measurement updated tracks
+#        assert 0, (len(up_tab), num_pred, num_meas)
         all_cost_m = np.zeros((num_pred, num_meas))
         for emm, z in enumerate(meas):
             for ii, ent in enumerate(self._track_tab):
 #                assert 0, (ii, ent.probDensity.means[0])
-                s_to_ii = num_pred * emm + ii
+                s_to_ii = num_pred * emm + ii + num_pred
                 up_tab[s_to_ii].probDensity.means = []
                 up_tab[s_to_ii].probDensity.covariances = []
                 up_tab[s_to_ii].probDensity.weights = []
@@ -284,24 +294,26 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     up_hyp.append(new_hyp)
 
                 else:
-#                    assert 0, (p_d_ratio, clutter, all_cost_m[p_hyp.track_set, :])
+#                    assert 0, (p_hyp.track_set, all_cost_m[p_hyp.track_set, :])
                     cost_m = p_d_ratio * all_cost_m[p_hyp.track_set, :] \
                         / clutter
                     neg_log = -np.log(cost_m)
                     m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
                                  / ss_w)
-                    m = int(np.asscalar(m))
-#                    assert 0, (p_hyp.assoc_prob, ss_w, self.req_upd, neg_log, m)
+                    m = int(m.item())
+#                    assert 0, (p_hyp.assoc_prob, ss_w, neg_log, m)
                     [assigns, costs] = murty_m_best(neg_log, m)
+
+#                    assert 0, (p_hyp.track_set, p_hyp.assoc_prob, assigns, costs, neg_log)
 
                     for (a, c) in zip(assigns, costs):
                         new_hyp = self._HypothesisHelper()
                         new_hyp.assoc_prob = -self.clutter_rate + num_meas \
                             * np.log(clutter) + p_hyp.num_tracks \
                             * np.log(self.prob_miss_detection) \
-                            + np.log(p_hyp.assoc_prob) + c
+                            + np.log(p_hyp.assoc_prob) - c
                         lst1 = [num_pred * x for x in a]
-                        lst2 = p_hyp.track_set
+                        lst2 = p_hyp.track_set.copy()
                         new_hyp.track_set = [sum(x) for x in zip(lst1, lst2)]
                         up_hyp.append(new_hyp)
 
@@ -312,42 +324,41 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._track_tab = up_tab
         self._hypotheses = up_hyp
         self._card_dist = self.calc_card_dist(self._hypotheses)
+        lst = [x.assoc_prob for x in self._hypotheses]
         self.clean_updates()
         self._extract_states(corr_updt=True, **kwargs)
 
     def _extract_states(self, **kwargs):
         corr_updt = kwargs.get('corr_updt', False)
         card = np.argmax(self._card_dist)
-        if card == 0:
-            self._states.append([])
-            self._labels.append([])
-            return
-
-        tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
-        weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
-
-        idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
-        track_gms = []
-        track_labs = []
-        for ptr in self._hypotheses[idx_cmp].track_set:
-            track_gms.append(self._track_tab[ptr].assoc_hist[-1])
-            track_labs.append(self._track_tab[ptr].label)
-
-        # make sure no duplicate labels
-        used = []
-        for lab in track_labs:
-            if lab in used:
-                msg = 'Probably should not have duplicate labels, debug this'
-                raise RuntimeError(msg)
-            else:
-                used.append(lab)
-
         new_states = []
         new_labels = []
-        for (gm, lab) in zip(track_gms, track_labs):
-            idx = np.argmax(gm.weights)
-            new_states.append(gm.means(idx))
-            new_labels.append(lab)
+
+        if card > 0:
+            tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
+            weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
+
+            idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
+            track_gms = []
+            track_labs = []
+            for ptr in self._hypotheses[idx_cmp].track_set:
+                track_gms.append(self._track_tab[ptr].assoc_hist[-1])
+                track_labs.append(self._track_tab[ptr].label)
+
+            # make sure no duplicate labels
+            used = []
+            for lab in track_labs:
+                if lab in used:
+                    msg = 'Probably should not have duplicate labels.'
+                    msg = msg + ' Debug this'
+                    raise RuntimeError(msg)
+                else:
+                    used.append(lab)
+
+            for (gm, lab) in zip(track_gms, track_labs):
+                idx = np.argmax(gm.weights)
+                new_states.append(gm.means(idx))
+                new_labels.append(lab)
 
         if corr_updt:
             self._states[-1] = new_states
@@ -395,7 +406,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         used = [0] * len(self._track_tab)
         for hyp in self._hypotheses:
             for ii in hyp.track_set:
-                used[int(ii)] += 1
+                used[ii] += 1
         nnz_inds = [idx for idx, val in enumerate(used) if val != 0]
         track_cnt = len(nnz_inds)
 
@@ -406,7 +417,35 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         new_tab = [self._track_tab[ii] for ii in nnz_inds]
         new_hyps = []
         for(ii, hyp) in enumerate(self._hypotheses):
-            hyp.track_set = new_inds[hyp.track_set]
+            if len(hyp.track_set) > 0:
+                try:
+                    hyp.track_set = [new_inds[ii] for ii in hyp.track_set]
+                except Exception:
+                    assert 0, hyp.track_set
             new_hyps.append(hyp)
         self._track_tab = new_tab
         self._hypotheses = new_hyps
+
+    def gate_meas(self, meas, means, covs, **kwargs):
+        if len(meas) == 0:
+            return []
+
+        valid = []
+        for (m, p) in zip(means, covs):
+            meas_mat = self.filter.get_meas_mat(m, **kwargs)
+            est = self.filter.get_est_meas(m, **kwargs)
+            meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
+            meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
+            v_s = cholesky(meas_pred_cov.T)
+            inv_sqrt_m_cov = inv(v_s)
+
+            for (ii, z) in enumerate(meas):
+                if ii in valid:
+                    continue
+                inov = z - est
+                dist = np.sum((inv_sqrt_m_cov.T @ inov)**2)
+                if dist < self.inv_chi2_gate:
+                    valid.append(ii)
+
+        valid.sort()
+        return [meas[ii] for ii in valid]

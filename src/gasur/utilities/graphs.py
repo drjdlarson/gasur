@@ -229,18 +229,20 @@ def murty_m_best(cost_mat, m):
 
     for (ii, a) in enumerate(assigns):
         costs[ii] += x * np.count_nonzero(a >= 0)
+    assigns += 1
 
     # remove extra entries
     assigns = assigns[:, 0:cost_mat.shape[0]]
-
-    # dummy assignmets are clutter/not used
-    assigns[np.where(assigns >= cost_mat.shape[1])] = np.nan
+    # dummy assignmets are clutter
+    assigns[np.where(assigns > cost_mat.shape[1])] = 0
+    assigns = assigns.astype(int)
     return (assigns, costs)
 
 
 def __murty_helper(p0, m):
     # MURTY   Murty's Algorithm for m-best ranked optimal assignment problem
     # Port of Ba Tuong Vo's 2015 Matlab code
+    # NOTE: the assignment is zero based indexing
     (s0, c0) = assign_opt(p0)
     s0 = s0.T
 
