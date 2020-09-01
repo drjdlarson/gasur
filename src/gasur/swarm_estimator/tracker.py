@@ -240,16 +240,13 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             up_tab[ii].assoc_hist.append(None)
 
         # measurement updated tracks
-#        assert 0, (len(up_tab), num_pred, num_meas)
         all_cost_m = np.zeros((num_pred, num_meas))
         for emm, z in enumerate(meas):
             for ii, ent in enumerate(self._track_tab):
-#                assert 0, (ii, ent.probDensity.means[0])
                 s_to_ii = num_pred * emm + ii + num_pred
                 up_tab[s_to_ii].probDensity.means = []
                 up_tab[s_to_ii].probDensity.covariances = []
                 up_tab[s_to_ii].probDensity.weights = []
-#                assert 0, ent.probDensity.means
                 for jj in range(0, len(ent.probDensity.means)):
                     self.filter.cov = ent.probDensity.covariances[jj]
                     state = ent.probDensity.means[jj]
@@ -294,17 +291,13 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     up_hyp.append(new_hyp)
 
                 else:
-#                    assert 0, (p_hyp.track_set, all_cost_m[p_hyp.track_set, :])
                     cost_m = p_d_ratio * all_cost_m[p_hyp.track_set, :] \
                         / clutter
                     neg_log = -np.log(cost_m)
                     m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
                                  / ss_w)
                     m = int(m.item())
-#                    assert 0, (p_hyp.assoc_prob, ss_w, neg_log, m)
                     [assigns, costs] = murty_m_best(neg_log, m)
-
-#                    assert 0, (p_hyp.track_set, p_hyp.assoc_prob, assigns, costs, neg_log)
 
                     for (a, c) in zip(assigns, costs):
                         new_hyp = self._HypothesisHelper()
@@ -418,10 +411,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         new_hyps = []
         for(ii, hyp) in enumerate(self._hypotheses):
             if len(hyp.track_set) > 0:
-                try:
-                    hyp.track_set = [new_inds[ii] for ii in hyp.track_set]
-                except Exception:
-                    assert 0, hyp.track_set
+                hyp.track_set = [new_inds[ii] for ii in hyp.track_set]
             new_hyps.append(hyp)
         self._track_tab = new_tab
         self._hypotheses = new_hyps
