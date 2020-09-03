@@ -146,6 +146,9 @@ def __aop_step4(assign, dist_mat, star_mat, prime_mat, covered_cols,
         star_row = ii
         if star_mat[ii, star_col]:
             break
+        else:
+            star_row = ii + 1
+
 
     while star_row < n_rows:
         new_star_mat[star_row, star_col] = False
@@ -153,8 +156,8 @@ def __aop_step4(assign, dist_mat, star_mat, prime_mat, covered_cols,
         prime_row = star_row
         prime_col = 0
         for ii in range(0, n_cols):
+            prime_col = ii
             if prime_mat[prime_row, ii]:
-                prime_col = ii
                 break
             else:
                 prime_col = ii + 1

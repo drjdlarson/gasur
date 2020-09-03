@@ -10,7 +10,12 @@ def k_shortest(log_cost_in, k):
         paths = []
         costs = []
         return (paths, costs)
-    log_cost = np.squeeze(log_cost_in)
+
+    if log_cost_in.size > 1:
+        log_cost = np.squeeze(log_cost_in.copy())
+    else:
+        log_cost = log_cost_in.copy()
+
     num_states = log_cost.size
     cost_mat = np.zeros((num_states, num_states))
 
@@ -83,7 +88,7 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
         for ind_dev_vert in range(w_ind_in_path, len(P_) - 1):
             temp_cost_mat = net_cost_mat.copy()
             for ii in range(0, ind_dev_vert - 1):
-                v = P_(ii)
+                v = P_[ii]
                 temp_cost_mat[v, :] = np.inf
                 temp_cost_mat[:, v] = np.inf
 
@@ -178,7 +183,7 @@ def __bfm_helper(G, r):
         # and intializes the shortest path parent-pointer and distance
         # arrays, p and D.
         # Derek O'Connor, 21 Jan 2012
-        inds = np.argwhere(G.T >= np.finfo(float).eps)
+        inds = np.argwhere(np.abs(G.T) >= np.finfo(float).eps)
         tail = inds[:, 1]
         head = inds[:, 0]
         W = G[tail, head]
@@ -225,7 +230,10 @@ def murty_m_best(cost_mat, m):
     x = cm.min()
     cm = cm - x
 
+#    try:
     (assigns, costs) = __murty_helper(cm, m)
+#    except Exception:
+#        assert 0, (cost_mat, m)
 
     for (ii, a) in enumerate(assigns):
         costs[ii] += x * np.count_nonzero(a >= 0)
@@ -247,7 +255,7 @@ def __murty_helper(p0, m):
     s0 = s0.T
 
     if m == 1:
-        return (s0, c0)
+        return (s0.reshape((1, s0.size)), np.array([c0]))
 
     (n_rows, n_cols) = p0.shape
     # preallocate arrays
@@ -288,7 +296,10 @@ def __murty_helper(p0, m):
                     P_tmp[aw, aj] = np.inf
                 else:
                     P_tmp[aw, (n_cols - n_rows):] = np.inf
+#                try:
                 (S_tmp, C_tmp) = assign_opt(P_tmp)
+#                except Exception:
+#                    assert 0, P_tmp
 
                 S_tmp = S_tmp.T
                 if (S_tmp >= 0).all():

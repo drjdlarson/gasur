@@ -46,7 +46,7 @@ class TestKShortesst:
         test.assert_approx_equal(cost, exp_cost)
         test.assert_array_equal(np.array(path), np.array(exp_path))
 
-    def test_k_shortest(self):
+    def test_k_shortest1(self):
         eps = np.finfo(float).eps
         k = 5
         log_cost = np.array([3.89182029811063, 3.89182029811063,
@@ -66,95 +66,26 @@ class TestKShortesst:
         test.assert_array_almost_equal(np.array(costs).squeeze(),
                                        np.array(exp_costs))
 
+    def test_k_shortest2(self):
+        eps = np.finfo(float).eps
+        k = 24
+        log_cost = np.array([-4.595119850134589])
+
+        (paths, costs) = graphs.k_shortest(log_cost, k)
+
+        exp_paths = [[0], []]
+        exp_costs = [-4.59511985013459, eps]
+
+        assert len(paths) == len(exp_paths)
+        for ii in range(0, len(paths)):
+            test.assert_array_equal(np.array(paths[ii]),
+                                    np.array(exp_paths[ii]))
+
+        test.assert_array_almost_equal(np.array(costs).squeeze(),
+                                       np.array(exp_costs))
+
 
 def test_murty_m_best1():
-    cm = np.array([[26.1142509467173, 26.1142509467173, 26.1142509467173,
-                   26.1142509467173]])
-    m = 256
-
-    (assigns, costs) = graphs.murty_m_best(cm, m)
-
-    exp_assigns = np.array([np.nan, 0, 1, 2, 3]).reshape((5, 1))
-    exp_costs = np.array([0, 26.1142509467173, 26.1142509467173,
-                          26.1142509467173, 26.1142509467173])
-
-    test.assert_array_equal(assigns, exp_assigns)
-    test.assert_array_equal(costs, exp_costs)
-
-
-def test_murty_m_best2():
-    cm = np.array([[26.1142509467173, 26.1142509467173, 26.1142509467173,
-                    10.6392155935140, 26.1142509467173, 26.1142509467173],
-                   [-6.82765666982308, 26.1142509467173, 26.1142509467173,
-                    26.1142509467173, 26.1142509467173, 26.1142509456407]])
-    m = 69
-
-    (assigns, costs) = graphs.murty_m_best(cm, m)
-
-    exp_assigns = np.array([[np.nan, 0],
-                            [np.nan, np.nan],
-                            [3, 0],
-                            [3, np.nan],
-                            [1, 0],
-                            [2, 0],
-                            [4, 0],
-                            [5, 0],
-                            [np.nan, 5],
-                            [1, np.nan],
-                            [2, np.nan],
-                            [4, np.nan],
-                            [0, np.nan],
-                            [5, np.nan],
-                            [np.nan, 1],
-                            [np.nan, 2],
-                            [np.nan, 3],
-                            [np.nan, 4],
-                            [3, 5],
-                            [3, 1],
-                            [3, 2],
-                            [3, 4],
-                            [1, 5],
-                            [2, 5],
-                            [4, 5],
-                            [0, 5],
-                            [5, 1],
-                            [1, 2],
-                            [2, 1],
-                            [4, 1],
-                            [0, 1],
-                            [5, 2],
-                            [1, 3],
-                            [2, 3],
-                            [4, 2],
-                            [0, 2],
-                            [5, 3],
-                            [1, 4],
-                            [2, 4],
-                            [4, 3],
-                            [0, 3],
-                            [5, 4],
-                            [0, 4]])
-    exp_costs = np.array([-6.82765666982308, 0, 3.81155892369094,
-                          10.6392155935140, 19.2865942768942, 19.2865942768942,
-                          19.2865942768942, 19.2865942768942, 26.1142509456407,
-                          26.1142509467173, 26.1142509467173, 26.1142509467173,
-                          26.1142509467173, 26.1142509467173, 26.1142509467173,
-                          26.1142509467173, 26.1142509467173, 26.1142509467173,
-                          36.7534665391547, 36.7534665402313, 36.7534665402313,
-                          36.7534665402313, 52.2285018923580, 52.2285018923580,
-                          52.2285018923580, 52.2285018923580, 52.2285018934345,
-                          52.2285018934345, 52.2285018934345, 52.2285018934345,
-                          52.2285018934345, 52.2285018934345, 52.2285018934345,
-                          52.2285018934345, 52.2285018934345, 52.2285018934345,
-                          52.2285018934345, 52.2285018934345, 52.2285018934345,
-                          52.2285018934345, 52.2285018934345, 52.2285018934345,
-                          52.2285018934345])
-
-    test.assert_array_equal(assigns, exp_assigns)
-    test.assert_array_almost_equal(costs, exp_costs)
-
-
-def test_murty_m_best3():
     cm = np.array([[-6.59485513, 26.11425095, -6.72357331,  8.46214993]])
     m = 322
 
@@ -163,6 +94,39 @@ def test_murty_m_best3():
     exp_assigns = np.array([3, 1, 0, 4, 2]).reshape((5, 1))
     exp_costs = np.array([-6.72357330218789, -6.59485513523219, 0,
                           8.46214993805601, 26.1142509467173])
+
+    test.assert_array_equal(assigns, exp_assigns)
+    test.assert_array_almost_equal(costs, exp_costs)
+
+
+def test_murty_m_best2():
+    cm = np.array([[-5.80280392, 26.11425095, 17.47669203, 26.11425095,
+                    26.11425095, 1.48712218, 26.11425095, 26.11097866,
+                    26.11425095]])
+    m = 1
+
+    (assigns, costs) = graphs.murty_m_best(cm, m)
+
+    exp_assigns = np.array([1]).reshape((1, 1))
+    exp_costs = np.array([-5.80280392])
+
+    test.assert_array_equal(assigns, exp_assigns)
+    test.assert_array_almost_equal(costs, exp_costs)
+
+
+def test_murty_m_best3():
+    cm = np.array([[-5.80280392000000, 26.1142509500000, 17.4766920300000,
+                    26.1142509500000, 26.1142509500000, 1.48712218000000,
+                    26.1142509500000, 26.1109786600000, 26.1142509500000],
+                   [-6.80184202000000, 26.1142509500000, 26.1142504300000,
+                    26.1142509500000, 26.1142509500000, 15.0267480200000,
+                    26.1142509500000, 26.1142509500000, 26.1142509500000]])
+    m = 1
+
+    (assigns, costs) = graphs.murty_m_best(cm, m)
+
+    exp_assigns = np.array([0, 1]).reshape((1, 2))
+    exp_costs = np.array([-6.80184202])
 
     test.assert_array_equal(assigns, exp_assigns)
     test.assert_array_almost_equal(costs, exp_costs)
