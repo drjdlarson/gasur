@@ -339,7 +339,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         meas_hists = []
         labels = []
         for ptr in self._hypotheses[idx_cmp].track_set:
-            meas_hists.append(self._track_tab[ptr].meas_assoc_hist)
+            meas_hists.append(self._track_tab[ptr].meas_assoc_hist.copy())
             labels.append(self._track_tab[ptr].label)
 
         both = set(self._lab_mem).intersection(labels)
@@ -366,9 +366,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             return
 
         for (hist, (b_time, b_idx)) in zip(self._meas_asoc_mem, self._lab_mem):
-            weights = self.birth_terms[b_idx][0].weights
-            means = self.birth_terms[b_idx][0].means
-            covs = self.birth_terms[b_idx][0].covariances
+            weights = self.birth_terms[b_idx][0].weights.copy()
+            means = self.birth_terms[b_idx][0].means.copy()
+            covs = self.birth_terms[b_idx][0].covariances.copy()
 
             for (t_after_b, emm) in enumerate(hist):
                 # propagate for GM
@@ -381,7 +381,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 # measurement correction for GM
                 tt = b_time + t_after_b
                 if emm is not None:
-                    meas = self._meas_tab[tt][emm]
+                    meas = self._meas_tab[tt][emm].copy()
                     for ii in range(0, len(weights)):
                         state = means[ii]
                         self.filter.cov = covs[ii]

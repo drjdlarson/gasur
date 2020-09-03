@@ -72,7 +72,7 @@ class TestGeneralizedLabeledMultiBernoulli:
 
             glmb.predict(time_step=k, dt=dt)
             glmb.correct(meas=meas)
-        glmb.extract_states(dt=dt)
+            glmb.extract_states(dt=dt)
 
         # check number of time steps
         assert len(glmb.states) == 3
@@ -87,7 +87,6 @@ class TestGeneralizedLabeledMultiBernoulli:
         assert len(glmb.states[2]) == 1
         assert len(glmb.labels[2]) == 1
 
-#        assert 0, glmb.states[1]
         act_state = glmb.states[1][0]
         exp_state = np.array([988.471986936194, -5.85688289282618,
                               1476.43207756921, 5.00728692275889,
