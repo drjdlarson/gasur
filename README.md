@@ -13,6 +13,9 @@ To just pull changes from all submodules use
 
 You can `cd` into individual submodules and use git commands as if you were inside that repo. More information can be found [here](https://git-scm.com/book/en/v2/Git-Tools-Submodules) .
 
+## Importing into Spyder
+The Spyder/Anaconda can be setup to install the local versions of the package so standalone scripts can be written as if the package were installed in the typical fashion (via pip install). Details on this process are included in the documentation.
+
 ## Testing
 Unit and validation tests make use **pytest** for the test runner, and tox for automation. The test scripts are located within the **test/** sub-directory.
 The tests can be run through a command line with python 3 and tox installed. There are 3 different environments for running tests. One for unit tests, another for validation tests, and a general purpose one  that accepts any arguments to pytest.
