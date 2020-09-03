@@ -408,27 +408,52 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     self._labels.append([new_label])
 
     def prune(self, **kwargs):
-        # find hypotheses with low association probabilities
-        keep_indices = np.argwhere(self._hypotheses.assoc_prob >
-                                   self.prune_threshold)
-        keep_assoc_prob = self._hypotheses.assoc_prob[keep_indices]
-        keep_track_set = self._hypotheses.track_set[keep_indices]
-        # normalize association probabilities
-        for ii in range(0, len(keep_assoc_prob)):
-            keep_assoc_prob[ii] = keep_assoc_prob[ii]/np.sum(keep_assoc_prob)
+        # Find hypotheses with low association probabilities
+        temp_assoc_probs = np.array([])
+        for ii in range(0, len(self._hypotheses)):
+            temp_assoc_probs = np.append(temp_assoc_probs,
+                                         self._hypotheses[ii].assoc_prob)
+        keep_indices = np.argwhere(temp_assoc_probs > self.prune_threshold).T
+        keep_indices = keep_indices.flatten()
 
-        # assign likely hypotheses to outputs
-        keep_hyp.assoc_prob = keep_assoc_prob
-        keep_hyp.track_set = keep_track_set
-        self._hypotheses = keep_hyp
+        # For re-weighing association probabilities
+        new_sum = np.sum(temp_assoc_probs[keep_indices])
+        self._hypotheses = [self._hypotheses[ii] for ii in keep_indices]
+        for ii in range(0, len(keep_indices)):
+            self._hypotheses[ii].assoc_prob = (self._hypotheses[ii].assoc_prob
+                                               / new_sum)
+        # Re-calculate cardinality
         self._card_dist = self.calc_card_dist(self._hypotheses)
 
     def cap(self, **kwargs):
-        # determine if there are too many hypotheses
+        # Determine if there are too many hypotheses
         if len(self._hypotheses) > self.max_hyps:
-            sorted_indices =  np.argsort(self._hypotheses.assoc_prob)
-            self._hypotheses.assoc_prob = self._hypotheses.assoc_prob[sorted_indices]
-            self._hypotheses.track_set = self._hypotheses.track_set[sorted_indices]
+            temp_assoc_probs = np.array([])
+            for ii in range(0, len(self._hypotheses)):
+                temp_assoc_probs = np.append(temp_assoc_probs,
+                                             self._hypotheses[ii].assoc_prob)
+            sorted_indices = np.argsort(temp_assoc_probs)
+            # Reverse order to get descending array
+            sorted_indices = sorted_indices[::-1]
+
+            # Take the top n assoc_probs, where n = max_hyps
+            keep_indices = np.array([], dtype=np.int64)
+            for ii in range(0, self.max_hyps):
+                keep_indices = np.append(keep_indices, int(sorted_indices[ii]))
+
+            # Assign to class
+            self._hypotheses = [self._hypotheses[ii] for ii in keep_indices]
+
+            # Normalize association probabilities
+            new_sum = 0
+            for ii in range(0, len(self._hypotheses)):
+                new_sum = new_sum + self._hypotheses[ii].assoc_prob
+
+            for ii in range(0, len(self._hypotheses)):
+                self._hypotheses[ii].assoc_prob = (self._hypotheses[ii].assoc_prob
+                                                   / new_sum)
+
+            # Re-calculate cardinality
             self._card_dist = self.calc_card_dist(self._hypotheses)
 
     def calc_card_dist(self, hyp_lst):

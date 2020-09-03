@@ -86,5 +86,6 @@ def glmb_tup():
     glmb.inv_chi2_gate = 32.2361913029694
     glmb.clutter_rate = 15
     glmb.clutter_den = 1 / (np.pi * 2000)
+    glmb.max_hyps = 5
 
     return (glmb, dt)
