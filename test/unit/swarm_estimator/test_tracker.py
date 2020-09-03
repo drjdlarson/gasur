@@ -179,6 +179,10 @@ class TestGeneralizedLabeledMultiBernoulli:
         glmb.predict(time_step=0)
 
         glmb.correct(meas=meas)
+        
+        glmb.prune
+        
+        glmb.cap
 
         # check only 1 time step
         assert len(glmb.states) == 1
