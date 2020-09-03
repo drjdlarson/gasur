@@ -85,3 +85,18 @@ class TestGeneralizedLabeledMultiBernoulli:
 
         # also means no labels
         assert len(glmb.labels[0]) == 0
+
+    def test_prune(self, glmb_tup):
+        glmb = glmb_tup[0]
+
+        glmb.prune()
+
+        # code runs with no errors
+        assert 1
+
+    def test_cap(self, glmb_tup):
+        glmb = glmb_tup[0]
+
+        glmb.cap()
+
+        # code runs with no errors

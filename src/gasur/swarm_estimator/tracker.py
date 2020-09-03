@@ -106,6 +106,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._hypotheses = [hyp0]  # list of _HypothesisHelper objects
 
         self._card_dist = []  # probability of having index # as cardinality
+        self.prune_threshold = 1*10**(-15) # hypothesis pruning threshold
+        self.max_hyps = 3000 # hypothesis capping threshold
+        
         super().__init__(**kwargs)
 
     @property
@@ -403,6 +406,30 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 else:
                     self._states.append([new_state])
                     self._labels.append([new_label])
+
+    def prune(self, **kwargs):
+        # find hypotheses with low association probabilities
+        keep_indices = np.argwhere(self._hypotheses.assoc_prob >
+                                   self.prune_threshold)
+        keep_assoc_prob = self._hypotheses.assoc_prob[keep_indices]
+        keep_track_set = self._hypotheses.track_set[keep_indices]
+        # normalize association probabilities
+        for ii in range(0, len(keep_assoc_prob)):
+            keep_assoc_prob[ii] = keep_assoc_prob[ii]/np.sum(keep_assoc_prob)
+
+        # assign likely hypotheses to outputs
+        keep_hyp.assoc_prob = keep_assoc_prob
+        keep_hyp.track_set = keep_track_set
+        self._hypotheses = keep_hyp
+        self._card_dist = self.calc_card_dist(self._hypotheses)
+
+    def cap(self, **kwargs):
+        # determine if there are too many hypotheses
+        if len(self._hypotheses) > self.max_hyps:
+            sorted_indices =  np.argsort(self._hypotheses.assoc_prob)
+            self._hypotheses.assoc_prob = self._hypotheses.assoc_prob[sorted_indices]
+            self._hypotheses.track_set = self._hypotheses.track_set[sorted_indices]
+            self._card_dist = self.calc_card_dist(self._hypotheses)
 
     def calc_card_dist(self, hyp_lst):
         if len(hyp_lst) == 0:
