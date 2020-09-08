@@ -5,6 +5,7 @@ from scipy.linalg import block_diag
 
 from gasur.utilities.graphs_subroutines import assign_opt
 
+
 def k_shortest(log_cost_in, k):
     if k == 0:
         paths = []

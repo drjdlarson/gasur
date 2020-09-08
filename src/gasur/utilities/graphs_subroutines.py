@@ -19,7 +19,11 @@ def assign_opt(dist_mat_in):
 
     # replace any infite values with a large number
     if np.isinf(dist_mat).any():
-        max_finite = dist_mat[np.nonzero(np.isfinite(dist_mat))].max()
+        max_finite = dist_mat[np.nonzero(np.isfinite(dist_mat))]
+        if len(max_finite) == 0:
+            return (assign, 0)
+
+        max_finite = max_finite.max()
         if max_finite > 0:
             inf_val = 10 * max_finite * n_rows * n_cols
         else:

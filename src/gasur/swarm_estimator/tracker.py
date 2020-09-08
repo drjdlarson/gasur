@@ -156,7 +156,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         for (ii, track) in enumerate(self._track_tab):
             gm_tup = zip(track.probDensity.means,
                          track.probDensity.covariances)
-            c_in = np.zeros((self.filter.get_input_mat().shape[0], 1))
+            c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
             gm = GaussianMixture()
             gm.weights = track.probDensity.weights.copy()
             for ii, (m, P) in enumerate(gm_tup):
@@ -291,7 +291,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 up_hyp.append(hyp)
         else:
             clutter = self.clutter_rate * self.clutter_den
-            p_d_ratio = self.prob_detection / self.prob_miss_detection
+            if self.prob_miss_detection == 0:
+                p_d_ratio = np.inf
+            else:
+                p_d_ratio = self.prob_detection / self.prob_miss_detection
             ss_w = 0
             for p_hyp in self._hypotheses:
                 ss_w += np.sqrt(p_hyp.assoc_prob)
@@ -304,8 +307,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     up_hyp.append(new_hyp)
 
                 else:
-                    cost_m = p_d_ratio * all_cost_m[p_hyp.track_set, :] \
-                        / clutter
+                    if clutter == 0:
+                        cost_m = np.inf * all_cost_m[p_hyp.track_set, :]
+                    else:
+                        cost_m = p_d_ratio * all_cost_m[p_hyp.track_set, :] \
+                            / clutter
                     neg_log = -np.log(cost_m)
                     m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
                                  / ss_w)
@@ -338,6 +344,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
         weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
 
+        if len(tracks_per_hyp) == 0:
+            self._states = [[]]
+            self._labels = [[]]
+            return
+
         idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
         meas_hists = []
         labels = []
@@ -358,9 +369,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             + [meas_hists[ii] for ii in surv_ii] \
             + [meas_hists[ii] for ii in new_ii]
 
-        self._states = []
-        self._labels = []
-        c_in = np.zeros((self.filter.get_input_mat().shape[0], 1))
+        self._states = [None] * len(self._meas_tab)
+        self._labels = [None] * len(self._meas_tab)
+        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
 
         # if there are no old or new tracks assume its the first iteration
         if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
@@ -400,12 +411,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 idx_trk = np.argmax(weights)
                 new_state = means[idx_trk]
                 new_label = (b_time, b_idx)
-                if tt < len(self._states):
+                if self._labels[tt] is None:
+                    self._states[tt] = [new_state]
+                    self._labels[tt] = [new_label]
+                else:
                     self._states[tt].append(new_state)
                     self._labels[tt].append(new_label)
-                else:
-                    self._states.append([new_state])
-                    self._labels.append([new_label])
 
     def prune(self, **kwargs):
         # Find hypotheses with low association probabilities

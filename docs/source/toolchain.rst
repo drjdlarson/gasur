@@ -20,41 +20,42 @@ Now open Anaconda Prompt, a command line version of the Navigator. This is requi
 for switching between environments than starting Navigator each time you want to launch spyder.
 Once Anaconda Prompt is open you can switch to your new environment with the following command
 
-.. code-block:: python  
+.. code-block:: shell  
    
    conda activate ENV_NAME
 
 or with
 
-.. code-block:: python  
+.. code-block:: shell  
    
    activate ENV_NAME
 
 where :code:`ENV_NAME` is the name of the environment you created. Next :code:`cd` to the root directory of the GASUR 
 repository. Now install the local GNCPy repo with the following command,
 
-.. code-block:: python  
+.. code-block:: shell  
    
-   pip install -e gncpy
+   conda install conda-build
+   conda install -e gncpy
 
 This will use whatever files are currently on your system, meaning if you pull changes from the remote repo or switch 
 branches your installation will  automatically update. Next install GASUR with
 
-.. code-block:: python  
+.. code-block:: shell  
    
-   pip install -e .
+   conda install -e .
 
 Finally, spyder needs to be installed in this environment. Spyders documentation recommends a different approach 
 (`here <https://github.com/spyder-ide/spyder/wiki/Working-with-packages-and-environments-in-Spyder>`_), but that requires extra setup once Spyder starts and its variable explorer will not be able to properly display 
 class information for classs within GASUR or GNCPy. Spyder can be installed to this environment with 
 
-.. code-block:: python  
+.. code-block:: shell  
    
    conda install spyder
 
 Once this is complete, you can start spyder by running
 
-.. code-block:: python  
+.. code-block:: shell  
    
    spyder
 
@@ -66,7 +67,7 @@ Returning
 ---------
 Once the environment is setup, you can start Spyder in that environment by opening Anaconda Prompt and running 
 
-.. code-block:: python  
+.. code-block:: shell  
    
    activate ENV_NAME
    spyder
