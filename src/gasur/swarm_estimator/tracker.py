@@ -1,9 +1,10 @@
 import numpy as np
 from numpy.linalg import cholesky, inv
+import numpy.random as rnd
+import matplotlib.pyplot as plt
 import abc
 from copy import deepcopy
 
-from gncpy.filters import BayesFilter
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
@@ -108,7 +109,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._card_dist = []  # probability of having index # as cardinality
         self.prune_threshold = 1*10**(-15) # hypothesis pruning threshold
         self.max_hyps = 3000 # hypothesis capping threshold
-        
+
         super().__init__(**kwargs)
 
     @property
@@ -547,3 +548,86 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         valid.sort()
         return [meas[ii] for ii in valid]
+
+    def plot_states_labels(self, plt_inds, **kwargs):
+        f_hndl = kwargs.get('f_hndl', None)
+        true_states = kwargs.get('true_states', None)
+
+        s_lst = deepcopy(self.states)
+        l_lst = deepcopy(self.labels)
+        x_dim = None
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        # get state dimension
+        for states in s_lst:
+            if len(states) > 0:
+                x_dim = states[0].size
+                break
+
+        # get unique labels
+        u_lbls = []
+        for lbls in l_lst:
+            for lbl in lbls:
+                if lbl not in u_lbls:
+                    u_lbls.append(lbl)
+
+        # get array of all state values for each label
+        for lbl in u_lbls:
+            x = np.nan * np.ones((x_dim, len(s_lst)))
+            for tt, lbls in enumerate(l_lst):
+                if lbl in lbls:
+                    ii = lbls.index(lbl)
+                    x[:, [tt]] = s_lst[tt][ii].copy()
+
+            # plot
+            r = rnd.random()
+            b = rnd.random()
+            g = rnd.random()
+            color = (r, g, b)
+            f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                   color=color)
+            s = "({}, {})".format(lbl[0], lbl[1])
+            tmp = x.copy()
+            tmp = tmp[:, ~np.any(np.isnan(tmp), axis=0)]
+            f_hndl.axes[0].text(tmp[plt_inds[0], 0], tmp[plt_inds[1], 0], s,
+                                color=color)
+
+        # if true states are available then plot them
+        if true_states is not None:
+            if x_dim is None:
+                for states in true_states:
+                    if len(states) > 0:
+                        x_dim = states[0].size
+                        break
+
+            max_true = max([len(x) for x in true_states])
+            x = np.nan * np.ones((x_dim, len(true_states), max_true))
+            for tt, states in enumerate(true_states):
+                for ii, state in enumerate(states):
+                    x[:, [tt], ii] = state.copy()
+
+            for ii in range(0, max_true):
+                f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                    x[plt_inds[1], :, ii],
+                                    color='k')
+
+        f_hndl.axes[0].grid(True)
+
+        return f_hndl
+
+    def plot_card_dist(self, **kwargs):
+        f_hndl = kwargs.get('f_hndl', None)
+
+        if len(self._card_dist) == 0:
+            raise RuntimeWarning("Empty Cardinality")
+            return f_hndl
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        x_vals = np.arange(0, len(self._card_dist))
+        f_hndl.axes[0].bar(x_vals, self._card_dist)
