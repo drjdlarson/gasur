@@ -1,7 +1,10 @@
 # gasur
 A python package for Guidance, navigation, and control (GNC) of Autonomous Swarms Using Random finite sets (RFS) developed by the Laboratory for Autonomy GNC and Estimation Research (LAGER) at the University of Alabama (UA).
 
-## Using git with submodules
+## Setup
+This package requires python 3 and tox for running tests and building documentation. Once python 3 is installed tox can be installed by running `pip3 install tox`
+
+### Using git with submodules
 To clone a repo with sub modules use
 `git clone --recursive [URL to Git repo]`
 
@@ -13,7 +16,7 @@ To just pull changes from all submodules use
 
 You can `cd` into individual submodules and use git commands as if you were inside that repo. More information can be found [here](https://git-scm.com/book/en/v2/Git-Tools-Submodules) .
 
-## Importing into Spyder
+### Importing into Spyder
 The Spyder/Anaconda can be setup to install the local versions of the package so standalone scripts can be written as if the package were installed in the typical fashion (via pip install). Details on this process are included in the documentation.
 
 ## Testing
@@ -46,3 +49,18 @@ The HTML version of the docs can be built using the following command:
 `tox -e docs -- html`
 
 Then they can be viewed by opening **docs/build/html/index.html**
+
+
+# Cite
+Please cite the framework as follows
+
+```
+@{gasur,
+@misc{gasur,
+  author       = {Jordan D. Larson, and Ryan W. Thomas, and Vaughn Weirens},
+  title        = {GASUR: a Python library for Guidance, navigation, and control of Autonomous Swarms Using Random finite sets},
+  howpublished = {Web page},
+  url          = {https://github.com/drjdlarson/gasur},
+  year         = {2019}
+}
+```

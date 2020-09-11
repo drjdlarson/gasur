@@ -1,4 +1,7 @@
-# -*- coding: utf-8 -*-
+""" Implements graph search algorithms.
+
+This module contains the functions for graph search algorithms.
+"""
 import numpy as np
 from warnings import warn
 from scipy.linalg import block_diag
@@ -7,6 +10,36 @@ from gasur.utilities.graphs_subroutines import assign_opt
 
 
 def k_shortest(log_cost_in, k):
+    """ This implents k-shortest path algorithm.
+
+    This ports the implementation from
+    `here <https://ba-tuong.vo-au.com/codes.html>`_.
+    to python. The following are comments from the original implementation.
+
+    Meral Shirazipour
+    This function is based on Yen's k-Shortest Path algorithm (1971)
+    This function calls a slightly modified function dijkstra()
+    by Xiaodong Wang 2004.
+    * log_cost_in must have positive weights/costs
+    Modified by BT VO
+    Replaces dijkstra's algorithm with Derek O'Connor's
+    Bellman-Ford-Moore implementation which allows negative entries in cost
+    matrices provided there are no negative cycles and used in GLMB filter
+    codes for prediction * netCostMatrix can have negative weights/costs
+
+    Args:
+        log_cost_in (Numpy array): Input cost matrix, inf represents absence
+            of a link
+        k (int): Maximum number of paths to find
+
+    Returns:
+        tuple containing:
+
+            - paths (list): List with each element being a list of
+              indices into the cost matrix for the shortest path
+            - costs (list): List of costs associated with each path
+    """
+
     if k == 0:
         paths = []
         costs = []
@@ -134,13 +167,66 @@ def __k_short_helper(net_cost_mat, src, dst, k_paths):
 
 
 def bfm_shortest_path(ncm, src, dst):
-    # Basic form of the Bellman-Ford-Moore Shortest Path algorithm
-    # Assumes G(N,A) is in sparse adjacency matrix form, with |N| = n,
-    # |A| = m = nnz(G). It constructs a shortest path tree with root r whichs
-    # is represented by an vector of parent 'pointers' p, along with a vector
-    # of shortest path lengths D.
-    # Complexity: O(mn)
-    # Derek O'Connor, 19 Jan, 11 Sep 2012.  derekroconnor@eircom.net
+    """ This implements the Bellman-Ford-Moore shortest path algorithm.
+
+    This ports the implementation from
+    `here <https://ba-tuong.vo-au.com/codes.html>`_.
+    to python. The following are comments from the original implementation.
+
+    Copyright (c) 2012, Derek O'Connor
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in
+      the documentation and/or other materials provided with the distribution
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+    POSSIBILITY OF SUCH DAMAGE.
+
+    Basic form of the Bellman-Ford-Moore Shortest Path algorithm
+    Assumes G(N,A) is in sparse adjacency matrix form, with abs(N) = n,
+    abs(A) = m = nnz(G). It constructs a shortest path tree with root r whichs
+    is represented by an vector of parent 'pointers' p, along with a vector
+    of shortest path lengths D.
+    Complexity: O(mn)
+    Derek O'Connor, 19 Jan, 11 Sep 2012.  derekroconnor@eircom.net
+
+    Unlike the original BFM algorithm, this does an optimality test on the
+    SP Tree p which may greatly reduce the number of iters to convergence.
+    USE:
+    n=10^6; G=sprand(n,n,5/n); r=1; format long g;
+    tic; [p,D,iter] = BFMSpathOT(G,r);toc, disp([(1:10)' p(1:10) D(1:10)]);
+    WARNING:
+    This algorithm performs well on random graphs but may perform
+    badly on real problems.
+
+    Args:
+        ncm (numpy array): cost matrix
+        src (int): source index
+        dst (int): destination index
+
+    Returns:
+        tuple containing
+
+            - dist (float): Path distance
+            - path (list): Indices of the path
+            - pred (int): number of iterations
+    """
     (pred, D, _) = __bfm_helper(ncm, src)
     dist = D[dst]
 
@@ -155,30 +241,32 @@ def bfm_shortest_path(ncm, src, dst):
 
 
 def __bfm_helper(G, r):
-    # Copyright (c) 2012, Derek O'Connor
-    # All rights reserved.
-    #
-    # Redistribution and use in source and binary forms, with or without
-    # modification, are permitted provided that the following conditions are
-    # met:
-    #
-    #     * Redistributions of source code must retain the above copyright
-    #       notice, this list of conditions and the following disclaimer.
-    #     * Redistributions in binary form must reproduce the above copyright
-    #       notice, this list of conditions and the following disclaimer in
-    #       the documentation and/or other materials provided with the distribution
-    #
-    # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-    # AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-    # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-    # ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-    # LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-    # CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-    # SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-    # INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-    # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-    # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-    # POSSIBILITY OF SUCH DAMAGE.
+    """
+    Copyright (c) 2012, Derek O'Connor
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+        * Redistributions of source code must retain the above copyright
+          notice, this list of conditions and the following disclaimer.
+        * Redistributions in binary form must reproduce the above copyright
+          notice, this list of conditions and the following disclaimer in
+          the documentation and/or other materials provided with the distribution
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+    POSSIBILITY OF SUCH DAMAGE.
+    """
     def init(G):
         # Transforms the sparse matrix G into the list-of-arcs form
         # and intializes the shortest path parent-pointer and distance
@@ -220,6 +308,26 @@ def __bfm_helper(G, r):
 
 
 def murty_m_best(cost_mat, m):
+    """ This implements Murty's m-best ranked optimal assignment.
+
+    This ports the implementation from
+    `here <https://ba-tuong.vo-au.com/codes.html>`_.
+    to python. The following are comments from the original implementation.
+
+    MURTY   Murty's Algorithm for m-best ranked optimal assignment problem
+    Port of Ba Tuong Vo's 2015 Matlab code
+    NOTE: the assignment is zero based indexing
+
+    Args:
+        cost_mat (numpy array): Cost matrix
+        m (int): Number of best ranked assignments to find
+
+    Returns:
+        tuple containing
+
+            - assigns (numpy array): Array of best paths
+            - costs (numpy array): Cost of each path
+    """
     if len(cost_mat.shape) == 1 or len(cost_mat.shape) > 2:
         raise RuntimeError('Cost matrix must be 2D array')
 
@@ -231,10 +339,7 @@ def murty_m_best(cost_mat, m):
     x = cm.min()
     cm = cm - x
 
-#    try:
     (assigns, costs) = __murty_helper(cm, m)
-#    except Exception:
-#        assert 0, (cost_mat, m)
 
     for (ii, a) in enumerate(assigns):
         costs[ii] += x * np.count_nonzero(a >= 0)
@@ -249,9 +354,6 @@ def murty_m_best(cost_mat, m):
 
 
 def __murty_helper(p0, m):
-    # MURTY   Murty's Algorithm for m-best ranked optimal assignment problem
-    # Port of Ba Tuong Vo's 2015 Matlab code
-    # NOTE: the assignment is zero based indexing
     (s0, c0) = assign_opt(p0)
     s0 = s0.T
 
@@ -297,10 +399,8 @@ def __murty_helper(p0, m):
                     P_tmp[aw, aj] = np.inf
                 else:
                     P_tmp[aw, (n_cols - n_rows):] = np.inf
-#                try:
+
                 (S_tmp, C_tmp) = assign_opt(P_tmp)
-#                except Exception:
-#                    assert 0, P_tmp
 
                 S_tmp = S_tmp.T
                 if (S_tmp >= 0).all():

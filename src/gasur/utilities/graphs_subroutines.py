@@ -1,7 +1,28 @@
+""" Implements helper functions for graph search algorithms.
+
+This module contains the longer helper functions for the graph search
+algorithms.
+"""
 import numpy as np
 
 
 def assign_opt(dist_mat_in):
+    """ Optimal assignment used by Murty's m-best assignment algorithm.
+
+    This ports the implementation from
+    `here <https://ba-tuong.vo-au.com/codes.html>`_.
+    to python.
+
+    Args:
+        dist_mat_in (numpy array): Distance matrix to calculate assignment from
+
+    Returns:
+        tuple containing
+
+            - assign (numpy array): Optimal assignment
+            - cost (float): Cost of the assignment
+    """
+
     dist_mat = dist_mat_in.copy()
     if len(dist_mat.shape) == 1:
         dist_mat = dist_mat.reshape((1, dist_mat.shape[0]))

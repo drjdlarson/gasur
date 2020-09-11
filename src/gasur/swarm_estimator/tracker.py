@@ -1,3 +1,8 @@
+"""Implements RFS tracking algorithms.
+
+This module contains the classes and data structures
+for RFS tracking related algorithms.
+"""
 import numpy as np
 from numpy.linalg import cholesky, inv
 import numpy.random as rnd
@@ -66,10 +71,18 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     and :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
 
     Attributes:
+        req_births (int): Number of requested birth hypotheses
+        req_surv (int): Number of requested surviving hypotheses
+        req_upd (int): Number of requested updated hypotheses
+        gating_on (bool): Determines if measurements are gated
+        inv_chi2_gate (float): Chi squared threshold for gating the
+            measurements
         birth_terms (list): List of tuples where the first element is
             a :py:class:`gasur.utilities.distributions.GaussianMixture` and
             the second is the birth probability for that term
-        req_births (int): Modeled maximum number of births
+        prune_threshold (float): Minimum association probability to keep when
+            pruning
+        max_hyps (int): Maximum number of hypotheses to keep when capping
     """
 
     class _TabEntry:
@@ -88,15 +101,17 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             return len(self.track_set)
 
     def __init__(self, **kwargs):
-        self.req_births = 0  # filter.H_bth
-        self.req_surv = 0  # filter.H_surv
-        self.req_upd = 0  # filter.H_upd
+        self.req_births = 0
+        self.req_surv = 0
+        self.req_upd = 0
         self.gating_on = False
-        self.inv_chi2_gate = 0  # filter.gamma
+        self.inv_chi2_gate = 0
+        self.prune_threshold = 1*10**(-15)
+        self.max_hyps = 3000
 
-        self._track_tab = []  # list of _TabEntry objects
-        self._states = [] # list of lists, one per time step, inner list is all states alive at that time
-        self._labels = [] # list of list, one per time step, inner list is all labels alive at that time
+        self._track_tab = []  # list of all possible tracks
+        self._states = []  # local copy for internal modification
+        self._labels = []  # local copy for internal modification
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._meas_asoc_mem = []
         self._lab_mem = []
@@ -107,24 +122,41 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._hypotheses = [hyp0]  # list of _HypothesisHelper objects
 
         self._card_dist = []  # probability of having index # as cardinality
-        self.prune_threshold = 1*10**(-15) # hypothesis pruning threshold
-        self.max_hyps = 3000 # hypothesis capping threshold
 
         super().__init__(**kwargs)
 
     @property
     def states(self):
-        """ Read only property
+        """ Read only list of extracted states.
+        
+        This is a list with 1 element per timestep, and each element is a list
+        of the best states extracted at that timestep. The order of each
+        element corresponds to the label order.
         """
         return self._states
 
     @property
     def labels(self):
-        """ Read only property
+        """ Read only list of extracted labels.
+        
+        This is a list with 1 element per timestep, and each element is a list
+        of the best labels extracted at that timestep. The order of each
+        element corresponds to the state order.
         """
         return self._labels
 
     def predict(self, **kwargs):
+        """ Prediction step of the GLMB filter.
+
+        This predicts new hypothesis, and propogates them to the next time
+        step. It also updates the cardinality distribution. Because this calls
+        the inner filter's predict function, the keyword arguments must contain
+        any information needed by that function.
+
+        Keyword Args:
+            time_step (int): Current time step number for the new labels
+        """
+
         # Find cost for each birth track, and setup lookup table
         time_step = kwargs['time_step']
         log_cost = []
@@ -225,9 +257,22 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._hypotheses[ii].assoc_prob = (self._hypotheses[ii].assoc_prob
                                                / tot_w)
         self._card_dist = self.calc_card_dist(self._hypotheses)
-        self.clean_predictions()
+        self._clean_predictions()
 
     def correct(self, **kwargs):
+        """ Correction step of the GLMB filter.
+
+        This corrects the hypotheses based on the measurements and gates the
+        measurements according to the class settings. It also updates the
+        cardinality distribution. Because this calls the inner filter's correct
+        function, the keyword arguments must contain any information needed by
+        that function.
+
+        Keyword Args:
+            meas (list): List of Nm x 1 numpy arrays that contain all the
+                measurements needed for this correction
+        """
+
         meas = kwargs['meas']
         del kwargs['meas']
 
@@ -238,7 +283,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             for ent in self._track_tab:
                 means.extend(ent.probDensity.means)
                 covs.extend(ent.probDensity.covariances)
-            meas = self.gate_meas(meas, means, covs, **kwargs)
+            meas = self._gate_meas(meas, means, covs, **kwargs)
 
         self._meas_tab.append(meas)
         num_meas = len(meas)
@@ -337,10 +382,18 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._track_tab = up_tab
         self._hypotheses = up_hyp
         self._card_dist = self.calc_card_dist(self._hypotheses)
-        lst = [x.assoc_prob for x in self._hypotheses]
-        self.clean_updates()
+        self._clean_updates()
 
     def extract_states(self, **kwargs):
+        """ Extracts the best state estimates.
+
+        This extracts the best states from the distribution. It should be
+        called once per time step after the correction function. This calls
+        both the inner filters predict and correct functions so the keyword
+        arguments must contain any additional variables needed by those
+        functions.
+        """
+
         card = np.argmax(self._card_dist)
         tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
         weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
@@ -360,7 +413,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         both = set(self._lab_mem).intersection(labels)
         surv_ii = [labels.index(x) for x in both]
         either = set(self._lab_mem).symmetric_difference(labels)
-        dead_ii = [self._lab_mem.index(a) for a in either if a in self._lab_mem]
+        dead_ii = [self._lab_mem.index(a) for a in either
+                   if a in self._lab_mem]
         new_ii = [labels.index(a) for a in either if a in labels]
 
         self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
@@ -420,6 +474,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     self._labels[tt].append(new_label)
 
     def prune(self, **kwargs):
+        """ Removes hypotheses below a threshold.
+
+        This should be called once per time step after the correction and
+        before the state extraction.
+        """
+
         # Find hypotheses with low association probabilities
         temp_assoc_probs = np.array([])
         for ii in range(0, len(self._hypotheses)):
@@ -438,6 +498,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._card_dist = self.calc_card_dist(self._hypotheses)
 
     def cap(self, **kwargs):
+        """ Removes least likely hypotheses until a maximum number is reached.
+
+        This should be called once per time step after pruning and
+        before the state extraction.
+        """
+
         # Determine if there are too many hypotheses
         if len(self._hypotheses) > self.max_hyps:
             temp_assoc_probs = np.array([])
@@ -445,6 +511,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 temp_assoc_probs = np.append(temp_assoc_probs,
                                              self._hypotheses[ii].assoc_prob)
             sorted_indices = np.argsort(temp_assoc_probs)
+            
             # Reverse order to get descending array
             sorted_indices = sorted_indices[::-1]
 
@@ -469,6 +536,17 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._card_dist = self.calc_card_dist(self._hypotheses)
 
     def calc_card_dist(self, hyp_lst):
+        """ Calucaltes the cardinality distribution.
+
+        Args:
+            hyp_lst (list): list of hypotheses to use when finding the
+                distribution
+
+        Returns:
+            (list): Each element is the probability that the index is the
+            cardinality.
+        """
+
         if len(hyp_lst) == 0:
             return 0
 
@@ -481,7 +559,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             card_dist.append(card)
         return card_dist
 
-    def clean_predictions(self):
+    def _clean_predictions(self):
         hash_lst = []
         for hyp in self._hypotheses:
             if len(hyp.track_set) == 0:
@@ -503,7 +581,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 new_hyps[new_ii].assoc_prob += self._hypotheses[ii].assoc_prob
         self._hypotheses = new_hyps
 
-    def clean_updates(self):
+    def _clean_updates(self):
         used = [0] * len(self._track_tab)
         for hyp in self._hypotheses:
             for ii in hyp.track_set:
@@ -525,7 +603,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._track_tab = new_tab
         self._hypotheses = new_hyps
 
-    def gate_meas(self, meas, means, covs, **kwargs):
+    def _gate_meas(self, meas, means, covs, **kwargs):
         if len(meas) == 0:
             return []
 
@@ -550,6 +628,25 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         return [meas[ii] for ii in valid]
 
     def plot_states_labels(self, plt_inds, **kwargs):
+        """ Plots the best estimate for the states and labels.
+
+        This assumes that the states have been extracted. It's designed to plot
+        two of the state variables (typically x/y position).
+
+        Args:
+            plt_inds (list): List of indices in the state vector to plot
+
+        Keyword Args:
+            f_hndl (Matplotlib figure): Current to figure to plot on. Always
+                plots on axes[0], pass None to create a new figure
+            true_states (list): list where each element is a list of numpy
+                N x 1 arrays of each true state. If not given true states
+                are not plotted.
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
         f_hndl = kwargs.get('f_hndl', None)
         true_states = kwargs.get('true_states', None)
 
@@ -619,6 +716,19 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         return f_hndl
 
     def plot_card_dist(self, **kwargs):
+        """ Plots the current cardinality distribution.
+
+        This assumes that the cardinality distribution has been calculated by
+        the class.
+
+        Keyword Args:
+            f_hndl (Matplotlib figure): Current to figure to plot on. Always
+                plots on axes[0], pass None to create a new figure
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
         f_hndl = kwargs.get('f_hndl', None)
 
         if len(self._card_dist) == 0:

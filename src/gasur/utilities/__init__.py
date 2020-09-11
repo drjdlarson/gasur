@@ -1,2 +1,2 @@
-"""Module containing utility code needed by other modules
+"""Package containing utility code needed by other modules
 """
