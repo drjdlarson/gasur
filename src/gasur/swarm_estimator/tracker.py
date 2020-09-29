@@ -7,12 +7,14 @@ import numpy as np
 from numpy.linalg import cholesky, inv
 import numpy.random as rnd
 import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 import abc
 from copy import deepcopy
 
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
+from gasur.utilities.plotting import calc_error_ellipse
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -69,6 +71,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     This is based on :cite:`Vo2013_LabeledRandomFiniteSetsandMultiObjectConjugatePriors`
     and :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
+    It does not account for agents spawned from existing tracks, only agents
+    birthed from the given birth model.
 
     Attributes:
         req_births (int): Number of requested birth hypotheses
@@ -83,6 +87,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         prune_threshold (float): Minimum association probability to keep when
             pruning
         max_hyps (int): Maximum number of hypotheses to keep when capping
+        save_covs (bool): Save covariance matrix for each state during state
+            extraction
     """
 
     class _TabEntry:
@@ -108,6 +114,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self.inv_chi2_gate = 0
         self.prune_threshold = 1*10**(-15)
         self.max_hyps = 3000
+        self.save_covs = False
 
         self._track_tab = []  # list of all possible tracks
         self._states = []  # local copy for internal modification
@@ -115,6 +122,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._meas_asoc_mem = []
         self._lab_mem = []
+        self._covs = []  # local copy for internal modification
 
         hyp0 = self._HypothesisHelper()
         hyp0.assoc_prob = 1
@@ -128,7 +136,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     @property
     def states(self):
         """ Read only list of extracted states.
-        
+
         This is a list with 1 element per timestep, and each element is a list
         of the best states extracted at that timestep. The order of each
         element corresponds to the label order.
@@ -138,12 +146,29 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     @property
     def labels(self):
         """ Read only list of extracted labels.
-        
+
         This is a list with 1 element per timestep, and each element is a list
         of the best labels extracted at that timestep. The order of each
         element corresponds to the state order.
         """
         return self._labels
+
+    @property
+    def covariances(self):
+        """ Read only list of extracted covariances.
+
+        This is a list with 1 element per timestep, and each element is a list
+        of the best covariances extracted at that timestep. The order of each
+        element corresponds to the state order.
+
+        Raises:
+            RuntimeWarning: If the class is not saving the covariances, and
+                returns an empty list
+        """
+        if not self.save_covs:
+            raise RuntimeWarning("Not saving covariances")
+            return []
+        return self._covs
 
     def predict(self, **kwargs):
         """ Prediction step of the GLMB filter.
@@ -159,6 +184,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         # Find cost for each birth track, and setup lookup table
         time_step = kwargs['time_step']
+
         log_cost = []
         birth_tab = []
         for ii, (gm, p) in enumerate(self.birth_terms):
@@ -187,17 +213,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         # Init and propagate surviving track table
         surv_tab = []
         for (ii, track) in enumerate(self._track_tab):
-            gm_tup = zip(track.probDensity.means,
-                         track.probDensity.covariances)
-            c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
-            gm = GaussianMixture()
-            gm.weights = track.probDensity.weights.copy()
-            for ii, (m, P) in enumerate(gm_tup):
-                self.filter.cov = P
-                n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
-                                             **kwargs)
-                gm.covariances.append(self.filter.cov.copy())
-                gm.means.append(n_mean)
+            gm = self.predict_prob_density(probDensity=track.probDensity,
+                                           **kwargs)
 
             entry = self._TabEntry()
             entry.probDensity = gm
@@ -259,6 +276,33 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._card_dist = self.calc_card_dist(self._hypotheses)
         self._clean_predictions()
 
+    def predict_prob_density(self, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter prediction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
+                probability density to run prediction on
+
+        Returns:
+            gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
+                predicted probability density
+        """
+        probDensity = kwargs['probDensity']
+        gm_tup = zip(probDensity.means,
+                     probDensity.covariances)
+        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
+        gm = GaussianMixture()
+        gm.weights = probDensity.weights.copy()
+        for ii, (m, P) in enumerate(gm_tup):
+            self.filter.cov = P
+            n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
+                                         **kwargs)
+            gm.covariances.append(self.filter.cov.copy())
+            gm.means.append(n_mean)
+
+        return gm
+
     def correct(self, **kwargs):
         """ Correction step of the GLMB filter.
 
@@ -303,30 +347,15 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         for emm, z in enumerate(meas):
             for ii, ent in enumerate(self._track_tab):
                 s_to_ii = num_pred * emm + ii + num_pred
-                up_tab[s_to_ii].probDensity.means = []
-                up_tab[s_to_ii].probDensity.covariances = []
-                up_tab[s_to_ii].probDensity.weights = []
-                for jj in range(0, len(ent.probDensity.means)):
-                    self.filter.cov = ent.probDensity.covariances[jj]
-                    state = ent.probDensity.means[jj]
-                    (mean, qz) = self.filter.correct(meas=z, cur_state=state,
-                                                     **kwargs)
-                    cov = self.filter.cov
-                    w = qz * ent.probDensity.weights[jj]
-                    up_tab[s_to_ii].probDensity.means.append(mean)
-                    up_tab[s_to_ii].probDensity.covariances.append(cov)
-                    up_tab[s_to_ii].probDensity.weights.append(w)
-                lst = up_tab[s_to_ii].probDensity.weights
-                lst = [x + np.finfo(float).eps for x in lst]
-                up_tab[s_to_ii].probDensity.weights = lst
-                tmp_sum = sum(up_tab[s_to_ii].probDensity.weights)
-                for jj in range(0, len(up_tab[s_to_ii].probDensity.weights)):
-                    up_tab[s_to_ii].probDensity.weights[jj] /= tmp_sum
+                (up_tab[s_to_ii].probDensity, cost) = \
+                    self.correct_prob_density(meas=z,
+                                              probDensity=ent.probDensity,
+                                              **kwargs)
 
                 # update association history with current measurement index
                 up_tab[s_to_ii].meas_assoc_hist = ent.meas_assoc_hist + [emm]
                 up_tab[s_to_ii].label = ent.label
-                all_cost_m[ii, emm] = tmp_sum
+                all_cost_m[ii, emm] = cost
 
         # component updates
         up_hyp = []
@@ -384,6 +413,77 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._card_dist = self.calc_card_dist(self._hypotheses)
         self._clean_updates()
 
+    def correct_prob_density(self, meas, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter correction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
+                probability density to run correction on
+            meas (list): List of measurements, each is a N x 1 numpy array
+
+        Returns:
+            tuple containing
+
+                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
+                  corrected probability density
+                - cost (float): Total cost of for the m best assignment
+        """
+        probDensity = kwargs['probDensity']
+
+        gm = GaussianMixture()
+        for jj in range(0, len(probDensity.means)):
+            self.filter.cov = probDensity.covariances[jj]
+            state = probDensity.means[jj]
+            (mean, qz) = self.filter.correct(meas=meas, cur_state=state,
+                                             **kwargs)
+            cov = self.filter.cov
+            w = qz * probDensity.weights[jj]
+            gm.means.append(mean)
+            gm.covariances.append(cov)
+            gm.weights.append(w)
+        lst = gm.weights
+        lst = [x + np.finfo(float).eps for x in lst]
+        gm.weights = lst
+        cost = sum(gm.weights)
+        for jj in range(0, len(gm.weights)):
+            gm.weights[jj] /= cost
+        return (gm, cost)
+
+    def extract_most_prob_states(self, thresh, **kwargs):
+        loc_self = deepcopy(self)
+        state_sets = []
+        cov_sets = []
+        label_sets = []
+        probs = []
+
+        idx = loc_self.extract_states(**kwargs)
+        if idx is None:
+            return (state_sets, label_sets, cov_sets, probs)
+
+        state_sets.append(loc_self.states.copy())
+        label_sets.append(loc_self.labels.copy())
+        if loc_self.save_covs:
+            cov_sets.append(loc_self.covariances.copy())
+        probs.append(loc_self._hypotheses[idx].assoc_prob)
+        loc_self._hypotheses[idx].assoc_prob = 0
+        while True:
+            idx = loc_self.extract_states(**kwargs)
+            if idx is None:
+                break
+
+            if loc_self._hypotheses[idx].assoc_prob >= thresh:
+                state_sets.append(loc_self.states.copy())
+                label_sets.append(loc_self.labels.copy())
+                if loc_self.save_covs:
+                    cov_sets.append(loc_self.covariances.copy())
+                probs.append(loc_self._hypotheses[idx].assoc_prob)
+                loc_self._hypotheses[idx].assoc_prob = 0
+            else:
+                break
+
+        return (state_sets, label_sets, cov_sets, probs)
+
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
@@ -392,6 +492,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         both the inner filters predict and correct functions so the keyword
         arguments must contain any additional variables needed by those
         functions.
+
+        Returns:
+            idx_cmp (int): Index of the hypothesis table used when extracting
+                states
         """
 
         card = np.argmax(self._card_dist)
@@ -401,7 +505,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         if len(tracks_per_hyp) == 0:
             self._states = [[]]
             self._labels = [[]]
-            return
+            self._covs = [[]]
+            return None
 
         idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
         meas_hists = []
@@ -426,52 +531,48 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self._states = [None] * len(self._meas_tab)
         self._labels = [None] * len(self._meas_tab)
-        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
+        if self.save_covs:
+            self._covs = [None] * len(self._meas_tab)
 
         # if there are no old or new tracks assume its the first iteration
         if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
             self._states = [[]]
             self._labels = [[]]
-            return
+            self._covs = [[]]
+            return None
 
         for (hist, (b_time, b_idx)) in zip(self._meas_asoc_mem, self._lab_mem):
-            weights = self.birth_terms[b_idx][0].weights.copy()
-            means = self.birth_terms[b_idx][0].means.copy()
-            covs = self.birth_terms[b_idx][0].covariances.copy()
+            pd = deepcopy(self.birth_terms[b_idx][0])
 
             for (t_after_b, emm) in enumerate(hist):
                 # propagate for GM
-                for ii in range(0, len(weights)):
-                    self.filter.cov = covs[ii]
-                    means[ii] = self.filter.predict(cur_state=means[ii],
-                                                    cur_input=c_in, **kwargs)
-                    covs[ii] = self.filter.cov.copy()
+                pd = self.predict_prob_density(probDensity=pd, **kwargs)
 
                 # measurement correction for GM
                 tt = b_time + t_after_b
                 if emm is not None:
                     meas = self._meas_tab[tt][emm].copy()
-                    for ii in range(0, len(weights)):
-                        state = means[ii]
-                        self.filter.cov = covs[ii]
-                        (means[ii], qz) = self.filter.correct(meas=meas,
-                                                              cur_state=state,
-                                                              **kwargs)
-                        covs[ii] = self.filter.cov.copy()
-                        weights[ii] = weights[ii] * qz + np.finfo(float).eps
-                    s_w = sum(weights)
-                    weights = [x / s_w for x in weights]
+                    (pd, _) = self.correct_prob_density(meas=meas,
+                                                        probDensity=pd,
+                                                        **kwargs)
 
                 # find best one and add to state table
-                idx_trk = np.argmax(weights)
-                new_state = means[idx_trk]
+                idx_trk = np.argmax(pd.weights)
+                new_state = pd.means[idx_trk]
+                new_cov = pd.covariances[idx_trk]
                 new_label = (b_time, b_idx)
                 if self._labels[tt] is None:
                     self._states[tt] = [new_state]
                     self._labels[tt] = [new_label]
+                    if self.save_covs:
+                        self._covs[tt] = [new_cov]
                 else:
                     self._states[tt].append(new_state)
                     self._labels[tt].append(new_label)
+                    if self.save_covs:
+                        self._covs[tt].append(new_cov)
+
+        return idx_cmp
 
     def prune(self, **kwargs):
         """ Removes hypotheses below a threshold.
@@ -511,7 +612,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 temp_assoc_probs = np.append(temp_assoc_probs,
                                              self._hypotheses[ii].assoc_prob)
             sorted_indices = np.argsort(temp_assoc_probs)
-            
+
             # Reverse order to get descending array
             sorted_indices = sorted_indices[::-1]
 
@@ -642,6 +743,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             true_states (list): list where each element is a list of numpy
                 N x 1 arrays of each true state. If not given true states
                 are not plotted.
+            sig_bnd (int): If set and the covariances are saved, the sigma
+                bounds are scaled by this number and plotted for each track
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
@@ -649,6 +752,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         f_hndl = kwargs.get('f_hndl', None)
         true_states = kwargs.get('true_states', None)
+        sig_bnd = kwargs.get('sig_bnd', None)
+
+        show_sig = sig_bnd is not None and self.save_covs
 
         s_lst = deepcopy(self.states)
         l_lst = deepcopy(self.labels)
@@ -674,18 +780,43 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         # get array of all state values for each label
         for lbl in u_lbls:
             x = np.nan * np.ones((x_dim, len(s_lst)))
+            if show_sig:
+                sigs = [None] * len(s_lst)
             for tt, lbls in enumerate(l_lst):
                 if lbl in lbls:
                     ii = lbls.index(lbl)
                     x[:, [tt]] = s_lst[tt][ii].copy()
+
+                    if show_sig:
+                        sig = np.zeros((2, 2))
+                        sig[0, 0] = self._covs[tt][ii][plt_inds[0],
+                                                       plt_inds[0]]
+                        sig[0, 1] = self._covs[tt][ii][plt_inds[0],
+                                                       plt_inds[1]]
+                        sig[1, 0] = self._covs[tt][ii][plt_inds[1],
+                                                       plt_inds[0]]
+                        sig[1, 1] = self._covs[tt][ii][plt_inds[1],
+                                                       plt_inds[1]]
+                        sigs[tt] = sig
 
             # plot
             r = rnd.random()
             b = rnd.random()
             g = rnd.random()
             color = (r, g, b)
+            if show_sig:
+                for tt, sig in enumerate(sigs):
+                    if sig is None:
+                        continue
+                    w, h, a = calc_error_ellipse(sig, sig_bnd)
+                    e = Ellipse(xy=x[plt_inds, tt], width=w,
+                                height=h, angle=a, zorder=-10000)
+                    e.set_clip_box(f_hndl.axes[0].bbox)
+                    e.set_alpha(0.2)
+                    e.set_facecolor(color)
+                    f_hndl.axes[0].add_artist(e)
             f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                   color=color)
+                                   color=color, edgecolors=(0, 0, 0))
             s = "({}, {})".format(lbl[0], lbl[1])
             tmp = x.copy()
             tmp = tmp[:, ~np.any(np.isnan(tmp), axis=0)]
@@ -712,6 +843,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                                     color='k')
 
         f_hndl.axes[0].grid(True)
+        f_hndl.axes[0].set_title("Labeled State Trajectories")
+        f_hndl.axes[0].set_ylabel("y-position")
+        f_hndl.axes[0].set_xlabel("x-position")
+        plt.tight_layout()
 
         return f_hndl
 
@@ -741,3 +876,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         x_vals = np.arange(0, len(self._card_dist))
         f_hndl.axes[0].bar(x_vals, self._card_dist)
+
+        f_hndl.axes[0].set_title("Cardinality Distribution")
+        f_hndl.axes[0].set_ylabel("Probability")
+        f_hndl.axes[0].set_xlabel("Cardinality")
+        plt.tight_layout()
+
+        return f_hndl
