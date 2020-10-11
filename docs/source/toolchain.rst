@@ -36,14 +36,14 @@ repository. Now install the local GNCPy repo with the following command,
 .. code-block:: shell  
    
    conda install conda-build
-   conda install -e gncpy
+   pip install -e gncpy
 
 This will use whatever files are currently on your system, meaning if you pull changes from the remote repo or switch 
 branches your installation will  automatically update. Next install GASUR with
 
 .. code-block:: shell  
    
-   conda install -e .
+   pip install -e .
 
 Finally, spyder needs to be installed in this environment. Spyders documentation recommends a different approach 
 (`here <https://github.com/spyder-ide/spyder/wiki/Working-with-packages-and-environments-in-Spyder>`_), but that requires extra setup once Spyder starts and its variable explorer will not be able to properly display 
