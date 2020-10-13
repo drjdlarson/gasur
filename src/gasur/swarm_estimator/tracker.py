@@ -747,6 +747,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 bounds are scaled by this number and plotted for each track
             rng (Generator): A numpy random generator, leave as None for
                 default.
+            meas_inds (list): List of indices in the measurement vecotr to plot
+                if this is specified all available measurements will be
+                plotted. Note, x-axis is first, then y-axis. Also note, if
+                gating is on then gated measurements will not be plotted.
+            lgnd_loc (string): Location of the legend.
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
@@ -756,10 +761,13 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         true_states = kwargs.get('true_states', None)
         sig_bnd = kwargs.get('sig_bnd', None)
         rng = kwargs.get('rng', None)
+        meas_inds = kwargs.get('meas_inds', None)
+        lgnd_loc = kwargs.get('lgnd_loc', 'upper left')
 
         if rng is None:
             rng = rnd.default_rng(1)
 
+        plt_meas = meas_inds is not None
         show_sig = sig_bnd is not None and self.save_covs
 
         s_lst = deepcopy(self.states)
@@ -784,6 +792,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     u_lbls.append(lbl)
 
         # get array of all state values for each label
+        added_sig_lbl = False
+        added_true_lbl = False
+        added_state_lbl = False
+        added_meas_lbl = False
         for lbl in u_lbls:
             x = np.nan * np.ones((x_dim, len(s_lst)))
             if show_sig:
@@ -815,14 +827,29 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     if sig is None:
                         continue
                     w, h, a = calc_error_ellipse(sig, sig_bnd)
-                    e = Ellipse(xy=x[plt_inds, tt], width=w,
-                                height=h, angle=a, zorder=-10000)
+                    if not added_sig_lbl:
+                        s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
+                        e = Ellipse(xy=x[plt_inds, tt], width=w,
+                                    height=h, angle=a, zorder=-10000,
+                                    label=s)
+                        added_sig_lbl = True
+                    else:
+                        e = Ellipse(xy=x[plt_inds, tt], width=w,
+                                    height=h, angle=a, zorder=-10000)
                     e.set_clip_box(f_hndl.axes[0].bbox)
                     e.set_alpha(0.2)
                     e.set_facecolor(color)
-                    f_hndl.axes[0].add_artist(e)
-            f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                   color=color, edgecolors=(0, 0, 0))
+                    f_hndl.axes[0].add_patch(e)
+
+            if not added_state_lbl:
+                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                       color=color, edgecolors=(0, 0, 0),
+                                       label='States')
+                added_state_lbl = True
+            else:
+                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                       color=color, edgecolors=(0, 0, 0))
+
             s = "({}, {})".format(lbl[0], lbl[1])
             tmp = x.copy()
             tmp = tmp[:, ~np.any(np.isnan(tmp), axis=0)]
@@ -844,14 +871,41 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     x[:, [tt], ii] = state.copy()
 
             for ii in range(0, max_true):
-                f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
-                                    x[plt_inds[1], :, ii],
-                                    color='k', marker='.')
+                if not added_true_lbl:
+                    f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                        x[plt_inds[1], :, ii],
+                                        color='k', marker='.',
+                                        label='True Trajectories')
+                    added_true_lbl = True
+                else:
+                    f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                        x[plt_inds[1], :, ii],
+                                        color='k', marker='.')
+
+        if plt_meas:
+            meas_x = []
+            meas_y = []
+            for meas_tt in self._meas_tab:
+                mx_ii = [m[meas_inds[0]].item() for m in meas_tt]
+                my_ii = [m[meas_inds[1]].item() for m in meas_tt]
+                meas_x.extend(mx_ii)
+                meas_y.extend(my_ii)
+            color = (128/255, 128/255, 128/255)
+            meas_x = np.asarray(meas_x)
+            meas_y = np.asarray(meas_y)
+            if not added_meas_lbl:
+                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                       color=color, marker='^',
+                                       label='Measurements')
+            else:
+                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                       color=color, marker='^')
 
         f_hndl.axes[0].grid(True)
         f_hndl.axes[0].set_title("Labeled State Trajectories")
         f_hndl.axes[0].set_ylabel("y-position")
         f_hndl.axes[0].set_xlabel("x-position")
+        plt.legend(loc=lgnd_loc)
         plt.tight_layout()
 
         return f_hndl
