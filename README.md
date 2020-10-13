@@ -55,7 +55,6 @@ Then they can be viewed by opening **docs/build/html/index.html**
 Please cite the framework as follows
 
 ```
-@{gasur,
 @misc{gasur,
   author       = {Jordan D. Larson, and Ryan W. Thomas, and Vaughn Weirens},
   title        = {GASUR: a Python library for Guidance, navigation, and control of Autonomous Swarms Using Random finite sets},
