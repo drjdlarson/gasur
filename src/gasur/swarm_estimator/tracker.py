@@ -731,7 +731,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         """ Plots the best estimate for the states and labels.
 
         This assumes that the states have been extracted. It's designed to plot
-        two of the state variables (typically x/y position).
+        two of the state variables (typically x/y position). The error ellipses
+        are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
         Args:
             plt_inds (list): List of indices in the state vector to plot
@@ -744,6 +745,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 are not plotted.
             sig_bnd (int): If set and the covariances are saved, the sigma
                 bounds are scaled by this number and plotted for each track
+            rng (Generator): A numpy random generator, leave as None for
+                default.
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
@@ -752,6 +755,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         f_hndl = kwargs.get('f_hndl', None)
         true_states = kwargs.get('true_states', None)
         sig_bnd = kwargs.get('sig_bnd', None)
+        rng = kwargs.get('rng', None)
+
+        if rng is None:
+            rng = rnd.default_rng(1)
 
         show_sig = sig_bnd is not None and self.save_covs
 
@@ -799,9 +806,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         sigs[tt] = sig
 
             # plot
-            r = rnd.random()
-            b = rnd.random()
-            g = rnd.random()
+            r = rng.random()
+            b = rng.random()
+            g = rng.random()
             color = (r, g, b)
             if show_sig:
                 for tt, sig in enumerate(sigs):
@@ -839,7 +846,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             for ii in range(0, max_true):
                 f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
                                     x[plt_inds[1], :, ii],
-                                    color='k')
+                                    color='k', marker='.')
 
         f_hndl.axes[0].grid(True)
         f_hndl.axes[0].set_title("Labeled State Trajectories")
