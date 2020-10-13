@@ -317,7 +317,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 measurements needed for this correction
         """
 
-        meas = kwargs['meas']
+        meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
 
         # gate measurements by tracks
@@ -571,7 +571,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     self._labels[tt].append(new_label)
                     if self.save_covs:
                         self._covs[tt].append(new_cov)
-
         return idx_cmp
 
     def prune(self, **kwargs):
