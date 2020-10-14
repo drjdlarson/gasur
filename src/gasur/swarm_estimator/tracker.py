@@ -747,11 +747,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 bounds are scaled by this number and plotted for each track
             rng (Generator): A numpy random generator, leave as None for
                 default.
-            meas_inds (list): List of indices in the measurement vecotr to plot
+            meas_inds (list): List of indices in the measurement vector to plot
                 if this is specified all available measurements will be
                 plotted. Note, x-axis is first, then y-axis. Also note, if
                 gating is on then gated measurements will not be plotted.
-            lgnd_loc (string): Location of the legend.
+            lgnd_loc (string): Location of the legend. Set to none to skip
+                creating a legend.
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
@@ -762,7 +763,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         sig_bnd = kwargs.get('sig_bnd', None)
         rng = kwargs.get('rng', None)
         meas_inds = kwargs.get('meas_inds', None)
-        lgnd_loc = kwargs.get('lgnd_loc', 'upper left')
+        lgnd_loc = kwargs.get('lgnd_loc', None)
 
         if rng is None:
             rng = rnd.default_rng(1)
@@ -905,7 +906,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         f_hndl.axes[0].set_title("Labeled State Trajectories")
         f_hndl.axes[0].set_ylabel("y-position")
         f_hndl.axes[0].set_xlabel("x-position")
-        plt.legend(loc=lgnd_loc)
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
         plt.tight_layout()
 
         return f_hndl
