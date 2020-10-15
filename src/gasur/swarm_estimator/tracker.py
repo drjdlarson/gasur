@@ -12,7 +12,7 @@ import abc
 from copy import deepcopy
 
 from gncpy.math import log_sum_exp
-from gasur.utilities.distributions import GaussianMixture
+from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
 from gasur.utilities.plotting import calc_error_ellipse
 
@@ -94,7 +94,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     class _TabEntry:
         def __init__(self):
             self.label = ()  # time step born, index of birth model born from
-            self.probDensity = GaussianMixture()
+            self.probDensity = None  # must be a distribution class
             self.meas_assoc_hist = []  # list indices into measurement list per time step
 
     class _HypothesisHelper:
@@ -945,3 +945,71 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         plt.tight_layout()
 
         return f_hndl
+
+
+class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    def predict_prob_density(self, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter prediction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.StudentsTMixture`): A
+                probability density to run prediction on
+
+        Returns:
+            pd (:py:class:`gasur.utilities.distributions.StudentsTMixture`): The
+                predicted probability density
+        """
+        probDensity = kwargs['probDensity']
+        pd_tup = zip(probDensity.means,
+                     probDensity.sclaings)
+        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
+        pd = StudentsTMixture()
+        pd.weights = probDensity.weights.copy()
+        for ii, (m, P) in enumerate(pd_tup):
+            self.filter.scale = P
+            n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
+                                         **kwargs)
+            pd.scalings.append(self.filter.scale.copy())
+            pd.means.append(n_mean)
+
+        return pd
+
+    def correct_prob_density(self, meas, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter correction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.StudentsTMixture`): A
+                probability density to run correction on
+            meas (list): List of measurements, each is a N x 1 numpy array
+
+        Returns:
+            tuple containing
+
+                - pd (:py:class:`gasur.utilities.distributions.StudentsTMixture`): The
+                  corrected probability density
+                - cost (float): Total cost of for the m best assignment
+        """
+        probDensity = kwargs['probDensity']
+
+        pd = StudentsTMixture()
+        for jj in range(0, len(probDensity.means)):
+            self.filter.scale = probDensity.scalings[jj]
+            state = probDensity.means[jj]
+            (mean, qz) = self.filter.correct(meas=meas, cur_state=state,
+                                             **kwargs)
+            scale = self.filter.scalings
+            w = qz * probDensity.weights[jj]
+            pd.means.append(mean)
+            pd.scalings.append(scale)
+            pd.weights.append(w)
+        lst = pd.weights
+        lst = [x + np.finfo(float).eps for x in lst]
+        pd.weights = lst
+        cost = sum(pd.weights)
+        for jj in range(0, len(pd.weights)):
+            pd.weights[jj] /= cost
+        return (pd, cost)
+
+
