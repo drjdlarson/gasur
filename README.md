@@ -55,11 +55,11 @@ Then they can be viewed by opening **docs/build/html/index.html**
 Please cite the framework as follows
 
 ```
-@misc{gasur,
-  author       = {Jordan D. Larson, and Ryan W. Thomas, and Vaughn Weirens},
-  title        = {GASUR: a Python library for Guidance, navigation, and control of Autonomous Swarms Using Random finite sets},
+@Misc{gasur,
+  author       = {Jordan D. Larson and Ryan W. Thomas and Vaughn Weirens},
   howpublished = {Web page},
+  title        = {{GASUR}: A {P}ython library for {G}uidance, navigation, and control of {A}utonomous {S}warms {U}sing {R}andom finite sets},
+  year         = {2019},
   url          = {https://github.com/drjdlarson/gasur},
-  year         = {2019}
 }
 ```
