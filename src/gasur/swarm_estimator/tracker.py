@@ -26,6 +26,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         prob_survive (float): Modeled probability of object survival
         birth_terms (list): List of terms in the birth model
     """
+
     def __init__(self, **kwargs):
         self.filter = None
         self.prob_detection = 1
@@ -65,50 +66,24 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
     def extract_states(self, **kwargs):
         pass
 
+
 class ProbabilityHypothesisDensity(RandomFiniteSetBase):
     """ Probability Hypothesis Density Filter
-    
-    
+
+
     """
-    class _TabEntry:
-        def __init__(self):
-            self.label = ()  # time step born, index of birth model born from
-            self.probDensity = None  # must be a distribution class
-            self.meas_assoc_hist = []  # list indices into measurement list per time step
-
-    class _HypothesisHelper:
-        def __init__(self):
-            self.assoc_prob = 0
-            self.track_set = []  # indices in lookup table
-
-        @property
-        def num_tracks(self):
-            return len(self.track_set)
 
     def __init__(self, **kwargs):
-        self.req_births = 0
-        self.req_surv = 0
-        self.req_upd = 0
         self.gating_on = False
         self.inv_chi2_gate = 0
+        self.extract_threshold = 0.5
         self.prune_threshold = 1*10**(-15)
-        self.max_hyps = 3000
         self.save_covs = False
 
-        self._track_tab = []  # list of all possible tracks
+        self._gaussMix = GaussianMixture()
         self._states = []  # local copy for internal modification
-        self._labels = []  # local copy for internal modification
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
-        self._meas_asoc_mem = []
-        self._lab_mem = []
         self._covs = []  # local copy for internal modification
-
-        hyp0 = self._HypothesisHelper()
-        hyp0.assoc_prob = 1
-        hyp0.track_set = []
-        self._hypotheses = [hyp0]  # list of _HypothesisHelper objects
-
-        self._card_dist = []  # probability of having index # as cardinality
 
         super().__init__(**kwargs)
 
@@ -120,17 +95,10 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         of the best states extracted at that timestep. The order of each
         element corresponds to the label order.
         """
-        return self._states
-
-    @property
-    def labels(self):
-        """ Read only list of extracted labels.
-
-        This is a list with 1 element per timestep, and each element is a list
-        of the best labels extracted at that timestep. The order of each
-        element corresponds to the state order.
-        """
-        return self._labels
+        if len(self._states) > 0:
+            return self._states[-1]
+        else:
+            return []
 
     @property
     def covariances(self):
@@ -147,8 +115,11 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         if not self.save_covs:
             raise RuntimeWarning("Not saving covariances")
             return []
-        return self._covs
-    
+        if len(self._covs) > 0:
+            return self._covs
+        else:
+            return []
+
     def predict(self, **kwargs):
         """ Prediction step of the PHD filter.
 
@@ -158,7 +129,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         any information needed by that function.
 
         Keyword Args:
-            
+
         """
         # time_step = kwargs['time_step']
         log_cost = []
@@ -251,7 +222,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                                                / tot_w)
         self._card_dist = self.calc_card_dist(self._hypotheses)
         self._clean_predictions()
-        
+
     def predict_prob_density(self, **kwargs):
         """ Loops over all elements in a probability distribution and preforms
         the filter prediction.
@@ -278,7 +249,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             gm.means.append(n_mean)
 
         return gm
-    
+
     def correct(self, **kwargs):
         """ Correction step of the PHD filter.
 
@@ -294,7 +265,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         """
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
-        
+
     def correct_prob_density(self, meas, **kwargs):
         """ Loops over all elements in a probability distribution and preforms
         the filter correction.
@@ -331,7 +302,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         for jj in range(0, len(gm.weights)):
             gm.weights[jj] /= cost
         return (gm, cost)
-    
+
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
@@ -345,21 +316,21 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             idx_cmp (int): Index of the hypothesis table used when extracting
                 states
         """
-        
+
     def prune(self, **kwargs):
         """ Removes hypotheses below a threshold.
 
         This should be called once per time step after the correction and
         before the state extraction.
         """
-    
+
     def cap(self, **kwargs):
         """ Removes least likely hypotheses until a maximum number is reached.
 
         This should be called once per time step after pruning and
         before the state extraction.
         """
-    
+
     def calc_card_dist(self, hyp_lst):
         """ Calucaltes the cardinality distribution.
 
@@ -371,7 +342,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             (list): Each element is the probability that the index is the
             cardinality.
         """
-        
+
     def _clean_predictions(self):
         hash_lst = []
         for hyp in self._hypotheses:
@@ -439,8 +410,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
         valid.sort()
         return [meas[ii] for ii in valid]
-    
-    def plot_states_labels(self, plt_inds, **kwargs):
+
+    def plot_states(self, plt_inds, **kwargs):
         """ Plots the best estimate for the states.
 
         This assumes that the states have been extracted. It's designed to plot
@@ -480,40 +451,132 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
         if rng is None:
             rng = rnd.default_rng(1)
-      
-    def plot_card_dist(self, **kwargs):
-        """ Plots the current cardinality distribution.
 
-        This assumes that the cardinality distribution has been calculated by
-        the class.
+        plt_meas = meas_inds is not None
+        show_sig = sig_bnd is not None and self.save_covs
 
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
-
-        Returns:
-            (Matplotlib figure): Instance of the matplotlib figure used
-        """
-
-        f_hndl = kwargs.get('f_hndl', None)
-
-        if len(self._card_dist) == 0:
-            raise RuntimeWarning("Empty Cardinality")
-            return f_hndl
+        s_lst = deepcopy(self._states)
+        x_dim = None
 
         if f_hndl is None:
             f_hndl = plt.figure()
             f_hndl.add_subplot(1, 1, 1)
 
-        x_vals = np.arange(0, len(self._card_dist))
-        f_hndl.axes[0].bar(x_vals, self._card_dist)
+        # get state dimension
+        for states in s_lst:
+            if len(states) > 0:
+                x_dim = states[0].size
+                break
 
-        f_hndl.axes[0].set_title("Cardinality Distribution")
-        f_hndl.axes[0].set_ylabel("Probability")
-        f_hndl.axes[0].set_xlabel("Cardinality")
+        # get array of all state values for each label
+        added_sig_lbl = False
+        added_true_lbl = False
+        added_state_lbl = False
+        added_meas_lbl = False
+        r = rng.random()
+        b = rng.random()
+        g = rng.random()
+        color = (r, g, b)
+        for tt, states in enumerate(s_lst):
+            if len(states) == 0:
+                continue
+
+            x = np.array(states)
+            if show_sig:
+                sigs = [None] * len(states)
+                for ii, cov in enumerate(self._covs[tt]):
+                    sig = np.zeros((2, 2))
+                    sig[0, 0] = cov[ii][plt_inds[0], plt_inds[0]]
+                    sig[0, 1] = cov[ii][plt_inds[0], plt_inds[1]]
+                    sig[1, 0] = cov[ii][plt_inds[1], plt_inds[0]]
+                    sig[1, 1] = cov[ii][plt_inds[1], plt_inds[1]]
+                    sigs[ii] = sig
+
+            # plot
+            if show_sig:
+                for ii, sig in enumerate(sigs):
+                    if sig is None:
+                        continue
+                    w, h, a = calc_error_ellipse(sig, sig_bnd)
+                    if not added_sig_lbl:
+                        s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
+                        e = Ellipse(xy=x[plt_inds, ii], width=w,
+                                    height=h, angle=a, zorder=-10000,
+                                    label=s)
+                        added_sig_lbl = True
+                    else:
+                        e = Ellipse(xy=x[plt_inds, ii], width=w,
+                                    height=h, angle=a, zorder=-10000)
+                    e.set_clip_box(f_hndl.axes[0].bbox)
+                    e.set_alpha(0.2)
+                    e.set_facecolor(color)
+                    f_hndl.axes[0].add_patch(e)
+
+            if not added_state_lbl:
+                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                       color=color, edgecolors=(0, 0, 0),
+                                       label='States')
+                added_state_lbl = True
+            else:
+                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                       color=color, edgecolors=(0, 0, 0))
+
+        # if true states are available then plot them
+        if true_states is not None:
+            if x_dim is None:
+                for states in true_states:
+                    if len(states) > 0:
+                        x_dim = states[0].size
+                        break
+
+            max_true = max([len(x) for x in true_states])
+            x = np.nan * np.ones((x_dim, len(true_states), max_true))
+            for tt, states in enumerate(true_states):
+                for ii, state in enumerate(states):
+                    x[:, [tt], ii] = state.copy()
+
+            for ii in range(0, max_true):
+                if not added_true_lbl:
+                    f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                        x[plt_inds[1], :, ii],
+                                        color='k', marker='.',
+                                        label='True Trajectories')
+                    added_true_lbl = True
+                else:
+                    f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                        x[plt_inds[1], :, ii],
+                                        color='k', marker='.')
+
+        if plt_meas:
+            meas_x = []
+            meas_y = []
+            for meas_tt in self._meas_tab:
+                mx_ii = [m[meas_inds[0]].item() for m in meas_tt]
+                my_ii = [m[meas_inds[1]].item() for m in meas_tt]
+                meas_x.extend(mx_ii)
+                meas_y.extend(my_ii)
+            color = (128/255, 128/255, 128/255)
+            meas_x = np.asarray(meas_x)
+            meas_y = np.asarray(meas_y)
+            if not added_meas_lbl:
+                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                       color=color, marker='^',
+                                       label='Measurements')
+            else:
+                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                       color=color, marker='^')
+
+        f_hndl.axes[0].grid(True)
+        f_hndl.axes[0].set_title("Labeled State Trajectories")
+        f_hndl.axes[0].set_ylabel("y-position")
+        f_hndl.axes[0].set_xlabel("x-position")
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
         plt.tight_layout()
 
-        return f_hndl 
+        return f_hndl
+
+
 class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     """ Delta-Generalized Labeled Multi-Bernoulli filter.
 
