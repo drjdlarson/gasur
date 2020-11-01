@@ -79,6 +79,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self.extract_threshold = 0.5
         self.prune_threshold = 1*10**(-15)
         self.save_covs = False
+        self.max_hyps = 3000
 
         self._gaussMix = GaussianMixture()
         self._states = []  # local copy for internal modification
@@ -131,97 +132,13 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         Keyword Args:
 
         """
-        # time_step = kwargs['time_step']
-        log_cost = []
-        birth_tab = []
-        for ii, (gm, p) in enumerate(self.birth_terms):
-            cost = p / (1 - p)
-            log_cost.append(-np.log(cost))
-            entry = self._TabEntry()
-            entry.probDensity = deepcopy(gm)
-            # entry.label = (time_step, ii)
-            birth_tab.append(entry)
-
-        # get K best hypothesis, and their index in the lookup table
-        (paths, hyp_cost) = k_shortest(np.array(log_cost), self.req_births)
-
-        # calculate association probabilities for birth hypothesis
-        tot_cost = 0
-        for c in hyp_cost:
-            tot_cost = tot_cost + np.exp(-c).item()
-        birth_hyps = []
-        for (p, c) in zip(paths, hyp_cost):
-            hyp = self._HypothesisHelper()
-            # NOTE: this may suffer from underflow and can be improved
-            hyp.assoc_prob = np.exp(-c).item() / tot_cost
-            hyp.track_set = p
-            birth_hyps.append(hyp)
-
-        # Init and propagate surviving track table
-        surv_tab = []
-        for (ii, track) in enumerate(self._track_tab):
-            gm = self.predict_prob_density(probDensity=track.probDensity,
+        self._gaussMix = self.predict_prob_density(probDensity=self._gaussMix,
                                            **kwargs)
-
-            entry = self._TabEntry()
-            entry.probDensity = gm
-            entry.meas_assoc_hist = deepcopy(track.meas_assoc_hist)
-            # entry.label = track.label
-            surv_tab.append(entry)
-
-        # loop over postierior components
-        surv_hyps = []
-        sum_sqrt_w = 0
-        for hyp in self._hypotheses:
-            sum_sqrt_w = sum_sqrt_w + np.sqrt(hyp.assoc_prob)
-        for hyp in self._hypotheses:
-            if hyp.num_tracks == 0:
-                new_hyp = self._HypothesisHelper()
-                new_hyp.assoc_prob = np.log(hyp.assoc_prob)
-                new_hyp.track_set = hyp.track_set
-                surv_hyps.append(new_hyp)
-            else:
-                cost = self.prob_survive / self.prob_death
-                log_cost = [-np.log(cost)] * hyp.num_tracks
-                k = np.round(self.req_surv * np.sqrt(hyp.assoc_prob)
-                             / sum_sqrt_w)
-                (paths, hyp_cost) = k_shortest(np.array(log_cost), k)
-
-                for (p, c) in zip(paths, hyp_cost):
-                    new_hyp = self._HypothesisHelper()
-                    new_hyp.assoc_prob = hyp.num_tracks \
-                        * np.log(self.prob_death) + np.log(hyp.assoc_prob) \
-                        - c.item()
-                    if len(p) > 0:
-                        new_hyp.track_set = [hyp.track_set[ii] for ii in p]
-                    else:
-                        new_hyp.track_set = []
-                    surv_hyps.append(new_hyp)
-
-        lse = log_sum_exp([x.assoc_prob for x in surv_hyps])
-        for ii in range(0, len(surv_hyps)):
-            surv_hyps[ii].assoc_prob = np.exp(surv_hyps[ii].assoc_prob - lse)
-
-        # Get  predicted hypothesis by convolution
-        self._track_tab = birth_tab + surv_tab
-        self._hypotheses = []
-        tot_w = 0
-        for b_hyp in birth_hyps:
-            for s_hyp in surv_hyps:
-                new_hyp = self._HypothesisHelper()
-                new_hyp.assoc_prob = b_hyp.assoc_prob * s_hyp.assoc_prob
-                tot_w = tot_w + new_hyp.assoc_prob
-                surv_lst = []
-                for x in s_hyp.track_set:
-                    surv_lst.append(x + len(birth_tab))
-                new_hyp.track_set = b_hyp.track_set + surv_lst
-                self._hypotheses.append(new_hyp)
-
-        for ii in range(0, len(self._hypotheses)):
-            self._hypotheses[ii].assoc_prob = (self._hypotheses[ii].assoc_prob
-                                               / tot_w)
-        self._card_dist = self.calc_card_dist(self._hypotheses)
-        self._clean_predictions()
+                
+        for (gm, _) in self.birth_terms:
+            self._gaussMix.weights.extend(gm.weights)
+            self._gaussMix.means.extend(gm.means)
+            self._gaussMix.covariances.extend(gm.covariances)
 
     def predict_prob_density(self, **kwargs):
         """ Loops over all elements in a probability distribution and preforms
@@ -240,7 +157,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                      probDensity.covariances)
         c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
         gm = GaussianMixture()
-        gm.weights = probDensity.weights.copy()
+        gm.weights = [self.prob_survive*x for x in probDensity.weights.copy()]
         for ii, (m, P) in enumerate(gm_tup):
             self.filter.cov = P
             n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
@@ -265,7 +182,21 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         """
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
-
+        
+        gmix = deepcopy(self._gaussMix)
+        gmix.weights = [self.prob_miss_detection*x for x in gmix.weights]
+        for (_, z) in enumerate(meas):
+            (gm, cost) = self.correct_prob_density(meas=z, 
+                                               probDensity=self._gaussMix,
+                                               **kwargs)
+        
+        gm.weights.extend(gmix.weights)
+        self._gaussMix.weights = gm.weights.copy()
+        gm.means.extend(gmix.means)
+        self._gaussMix.means = gm.means.copy()
+        gm.covariances.extend(gmix.covariances)
+        self._gaussMix.covariances = gm.covariances.copy()
+        
     def correct_prob_density(self, meas, **kwargs):
         """ Loops over all elements in a probability distribution and preforms
         the filter correction.
@@ -285,6 +216,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         probDensity = kwargs['probDensity']
 
         gm = GaussianMixture()
+        
+        
         for jj in range(0, len(probDensity.means)):
             self.filter.cov = probDensity.covariances[jj]
             state = probDensity.means[jj]
@@ -303,6 +236,36 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             gm.weights[jj] /= cost
         return (gm, cost)
 
+    def prune(self, **kwargs):
+        """ Removes hypotheses below a threshold.
+
+        This should be called once per time step after the correction and
+        before the state extraction.
+        """
+        idx = np.where(np.asarray(self._gaussMix.weights)<self.prune_threshold)
+        idx = np.ndarray.flatten(idx[0])
+        if len(idx)!=0:
+            for index in sorted(idx, reverse=True):
+                del self._gaussMix.means[index]
+                del self._gaussMix.weights[index]
+                del self._gaussMix.covariances[index]
+        
+        
+        
+    def cap(self, **kwargs):
+        """ Removes least likely hypotheses until a maximum number is reached.
+
+        This should be called once per time step after pruning and
+        before the state extraction.
+        """
+        if len(self._gaussMix.weights) > self.max_hyps:
+            self._gaussMix.weights.sort(reverse=True)
+            del self._gaussMix.weights[self.max_hyps:-1]
+            self._gaussMix.means.sort(reverse=True)
+            del self._gaussMix.means[self.max_hyps:-1]
+            self._gaussMix.covariances.sort(reverse=True)
+            del self._gaussMix.covariances[self.max_hyps:-1]
+        
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
@@ -311,81 +274,13 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         both the inner filters predict and correct functions so the keyword
         arguments must contain any additional variables needed by those
         functions.
-
-        Returns:
-            idx_cmp (int): Index of the hypothesis table used when extracting
-                states
         """
-
-    def prune(self, **kwargs):
-        """ Removes hypotheses below a threshold.
-
-        This should be called once per time step after the correction and
-        before the state extraction.
-        """
-
-    def cap(self, **kwargs):
-        """ Removes least likely hypotheses until a maximum number is reached.
-
-        This should be called once per time step after pruning and
-        before the state extraction.
-        """
-
-    def calc_card_dist(self, hyp_lst):
-        """ Calucaltes the cardinality distribution.
-
-        Args:
-            hyp_lst (list): list of hypotheses to use when finding the
-                distribution
-
-        Returns:
-            (list): Each element is the probability that the index is the
-            cardinality.
-        """
-
-    def _clean_predictions(self):
-        hash_lst = []
-        for hyp in self._hypotheses:
-            if len(hyp.track_set) == 0:
-                lst = []
-            else:
-                hyp.track_set.sort()
-                lst = [int(x) for x in hyp.track_set]
-            h = hash('*'.join(map(str, lst)))
-            hash_lst.append(h)
-
-        new_hyps = []
-        used_hash = []
-        for ii, h in enumerate(hash_lst):
-            if h not in used_hash:
-                used_hash.append(h)
-                new_hyps.append(self._hypotheses[ii])
-            else:
-                new_ii = used_hash.index(h)
-                new_hyps[new_ii].assoc_prob += self._hypotheses[ii].assoc_prob
-        self._hypotheses = new_hyps
-
-    def _clean_updates(self):
-        used = [0] * len(self._track_tab)
-        for hyp in self._hypotheses:
-            for ii in hyp.track_set:
-                used[ii] += 1
-        nnz_inds = [idx for idx, val in enumerate(used) if val != 0]
-        track_cnt = len(nnz_inds)
-
-        new_inds = [0] * len(self._track_tab)
-        for (ii, v) in zip(nnz_inds, [ii for ii in range(0, track_cnt)]):
-            new_inds[ii] = v
-
-        new_tab = [deepcopy(self._track_tab[ii]) for ii in nnz_inds]
-        new_hyps = []
-        for(ii, hyp) in enumerate(self._hypotheses):
-            if len(hyp.track_set) > 0:
-                hyp.track_set = [new_inds[ii] for ii in hyp.track_set]
-            new_hyps.append(hyp)
-
-        self._track_tab = new_tab
-        self._hypotheses = new_hyps
+        idx = np.where(np.asarray(self._gaussMix.weights)>=self.extract_threshold)
+        idx = np.ndarray.flatten(idx[0])
+        if len(idx)!=0:
+            for jj in range(0, len(idx)):
+                self._states.append(self._gaussMix.means[idx[jj]])
+                self._covs.append(self._gaussMix.covariances[idx[jj]])
 
     def _gate_meas(self, meas, means, covs, **kwargs):
         if len(meas) == 0:
