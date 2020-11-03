@@ -79,7 +79,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self.extract_threshold = 0.5
         self.prune_threshold = 1*10**(-5)
         self.save_covs = False
-        self.max_hyps = 100
+        self.max_gauss = 100
 
         self._gaussMix = GaussianMixture()
         self._states = []  # local copy for internal modification
@@ -252,13 +252,15 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         This should be called once per time step after pruning and
         before the state extraction.
         """
-        if len(self._gaussMix.weights) > self.max_hyps:
+        if len(self._gaussMix.weights) > self.max_gauss:
             idx = np.argsort(self._gaussMix.weights)
-            for index in idx[0:-self.max_hyps]:
+            w = sum(self._gaussMix.weights)
+            for index in sorted(idx[0:-self.max_gauss], reverse=True):
                 del self._gaussMix.means[index]
                 del self._gaussMix.weights[index]
                 del self._gaussMix.covariances[index]
-
+            self._gaussMix.weights = [x * (w / sum(self._gaussMix.weights))
+                                      for x in self._gaussMix.weights]
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
