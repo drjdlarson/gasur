@@ -2,18 +2,19 @@
 """
 import numpy as np
 from numpy.linalg import eigh
+import numpy.random as rnd
 
 
 def calc_error_ellipse(cov, n_sig):
     """ Calculates parameters for an error ellipse.
-    
+
     This calucates the error ellipse for a given sigma
     number according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`.
-    
+
     Args:
         cov (2 x 2 numpy array): covariance matrix.
         n_sig (float): Sigma number, must be positive.
-    
+
     Returns:
         tuple containing
 
@@ -34,3 +35,42 @@ def calc_error_ellipse(cov, n_sig):
     width, height = 2 * n_sig * np.sqrt(vals)
 
     return width, height, angle
+
+
+def init_plotting_opts(**kwargs):
+    """ Processes common plotting options in a common interface.
+
+    Keyword Args:
+            f_hndl (Matplotlib figure): Current to figure to plot on. Always
+                plots on axes[0], pass None to create a new figure
+            lgnd_loc (string): Location of the legend. Set to none to skip
+                creating a legend.
+            sig_bnd (int): If set and the covariances are saved, the sigma
+                bounds are scaled by this number and plotted for each track
+            time_vec (list): list of time values
+            true_states (list): list where each element is a list of numpy
+                N x 1 arrays of each true state. If not given true states
+                are not plotted.
+            rng (Generator): A numpy random generator, leave as None for
+                default.
+            meas_inds (list): List of indices in the measurement vector to plot
+                if this is specified all available measurements will be
+                plotted. Note, x-axis is first, then y-axis. Also note, if
+                gating is on then gated measurements will not be plotted.
+
+
+        Returns:
+            (dict): Dictionary with standard keys for common values
+    """
+    opts = {}
+
+    opts['f_hndl'] = kwargs.get('f_hndl', None)
+    opts['lgnd_loc'] = kwargs.get('lgnd_loc', None)
+
+    opts['sig_bnd'] = kwargs.get('sig_bnd', 1)
+    opts['time_vec'] = kwargs.get('time_vec', None)
+    opts['true_states'] = kwargs.get('true_states', None)
+    opts['rng'] = kwargs.get('rng', rnd.default_rng(1))
+    opts['meas_inds'] = kwargs.get('meas_inds', None)
+
+    return opts

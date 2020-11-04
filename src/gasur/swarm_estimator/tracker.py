@@ -14,7 +14,7 @@ from copy import deepcopy
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
-from gasur.utilities.plotting import calc_error_ellipse
+from gasur.utilities.plotting import calc_error_ellipse, init_plotting_opts
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -356,36 +356,31 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         two of the state variables (typically x/y position). The error ellipses
         are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+            - true_states
+            - sig_bnd
+            - rng
+            - meas_inds
+            - lgnd_loc
+
         Args:
             plt_inds (list): List of indices in the state vector to plot
-
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
-            true_states (list): list where each element is a list of numpy
-                N x 1 arrays of each true state. If not given true states
-                are not plotted.
-            sig_bnd (int): If set and the covariances are saved, the sigma
-                bounds are scaled by this number and plotted for each track
-            rng (Generator): A numpy random generator, leave as None for
-                default.
-            meas_inds (list): List of indices in the measurement vector to plot
-                if this is specified all available measurements will be
-                plotted. Note, x-axis is first, then y-axis. Also note, if
-                gating is on then gated measurements will not be plotted.
-            lgnd_loc (string): Location of the legend. Set to none to skip
-                creating a legend.
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
-        true_states = kwargs.get('true_states', None)
-        sig_bnd = kwargs.get('sig_bnd', None)
-        rng = kwargs.get('rng', None)
-        meas_inds = kwargs.get('meas_inds', None)
-        lgnd_loc = kwargs.get('lgnd_loc', None)
+        opts = init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        true_states = opts['true_states']
+        sig_bnd = opts['sig_bnd']
+        rng = opts['rng']
+        meas_inds = opts['meas_inds']
+        lgnd_loc = opts['lgnd_loc']
 
         if rng is None:
             rng = rnd.default_rng(1)
@@ -579,15 +574,18 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
+        opts = init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
 
         if len(self._card_dist) == 0:
             raise RuntimeWarning("Empty Cardinality")
@@ -613,18 +611,24 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+            - sig_bnd
+            - time_vec
+            - lgnd_loc
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
-        sig_bnd = kwargs.get('sig_bnd', 1)
-        time_vec = kwargs.get('time_vec', None)
-        lgnd_loc = kwargs.get('lgnd_loc', None)
+        opts = init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        sig_bnd = opts['sig_bnd']
+        time_vec = opts['time_vec']
+        lgnd_loc = opts['lgnd_loc']
 
         if len(self._card_time_hist) == 0:
             raise RuntimeWarning("Empty Cardinality")
@@ -1329,36 +1333,31 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         two of the state variables (typically x/y position). The error ellipses
         are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+            - true_states
+            - sig_bnd
+            - rng
+            - meas_inds
+            - lgnd_loc
+
         Args:
             plt_inds (list): List of indices in the state vector to plot
-
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
-            true_states (list): list where each element is a list of numpy
-                N x 1 arrays of each true state. If not given true states
-                are not plotted.
-            sig_bnd (int): If set and the covariances are saved, the sigma
-                bounds are scaled by this number and plotted for each track
-            rng (Generator): A numpy random generator, leave as None for
-                default.
-            meas_inds (list): List of indices in the measurement vector to plot
-                if this is specified all available measurements will be
-                plotted. Note, x-axis is first, then y-axis. Also note, if
-                gating is on then gated measurements will not be plotted.
-            lgnd_loc (string): Location of the legend. Set to none to skip
-                creating a legend.
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
-        true_states = kwargs.get('true_states', None)
-        sig_bnd = kwargs.get('sig_bnd', None)
-        rng = kwargs.get('rng', None)
-        meas_inds = kwargs.get('meas_inds', None)
-        lgnd_loc = kwargs.get('lgnd_loc', None)
+        opts = init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        true_states = opts['true_states']
+        sig_bnd = opts['sig_bnd']
+        rng = opts['rng']
+        meas_inds = opts['meas_inds']
+        lgnd_loc = opts['lgnd_loc']
 
         if rng is None:
             rng = rnd.default_rng(1)
@@ -1513,15 +1512,18 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
+        opts = init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
 
         if len(self._card_dist) == 0:
             raise RuntimeWarning("Empty Cardinality")
