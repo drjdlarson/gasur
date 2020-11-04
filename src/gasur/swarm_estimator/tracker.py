@@ -78,6 +78,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self.inv_chi2_gate = 0
         self.extract_threshold = 0.5
         self.prune_threshold = 1*10**(-5)
+        self.merge_threshold = 4
         self.save_covs = False
         self.max_gauss = 100
 
@@ -183,6 +184,10 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
 
+        if self.gating_on:
+            meas = self._gate_meas(meas, self._gaussMix.means,
+                                   self._gaussMix.covariances, **kwargs)
+
         self._meas_tab.append(meas)
 
         gmix = deepcopy(self._gaussMix)
@@ -217,6 +222,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         gm = GaussianMixture()
         det_weights = [self.prob_detection * x for x in probDensity.weights]
         for z in meas:
+            w_lst = []
             for jj in range(0, len(probDensity.means)):
                 self.filter.cov = probDensity.covariances[jj]
                 state = probDensity.means[jj]
@@ -226,9 +232,9 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 w = qz * det_weights[jj]
                 gm.means.append(mean)
                 gm.covariances.append(cov)
-                gm.weights.append(w)
-            gm.weights = [x / (self.clutter_rate * self.clutter_den
-                               + sum(gm.weights)) for x in gm.weights]
+                w_lst.append(w)
+            gm.weights.extend([x / (self.clutter_rate * self.clutter_den
+                               + sum(w_lst)) for x in w_lst])
 
         return gm
 
@@ -238,13 +244,48 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         This should be called once per time step after the correction and
         before the state extraction.
         """
-        idx = np.where(np.asarray(self._gaussMix.weights)<self.prune_threshold)
+        idx = np.where(np.asarray(self._gaussMix.weights)
+                       < self.prune_threshold)
         idx = np.ndarray.flatten(idx[0])
-        if len(idx)!=0:
-            for index in sorted(idx, reverse=True):
-                del self._gaussMix.means[index]
-                del self._gaussMix.weights[index]
-                del self._gaussMix.covariances[index]
+        for index in sorted(idx, reverse=True):
+            del self._gaussMix.means[index]
+            del self._gaussMix.weights[index]
+            del self._gaussMix.covariances[index]
+
+    def merge(self, **kwargs):
+        loop_inds = set(range(0, len(self._gaussMix.means)))
+
+        w_lst = []
+        m_lst = []
+        p_lst = []
+        while len(loop_inds) > 0:
+            jj = np.argmax(self._gaussMix.weights)
+            comp_inds = []
+            inv_cov = inv(self._gaussMix.covariances[jj])
+            for ii in loop_inds:
+                diff = self._gaussMix.means[ii] - self._gaussMix.means[jj]
+                val = diff.T @ inv_cov @ diff
+                if val <= self.merge_threshold:
+                    comp_inds.append(ii)
+
+            w_new = sum([self._gaussMix.weights[ii] for ii in comp_inds])
+            m_new = sum([self._gaussMix.weights[ii] * self._gaussMix.means[ii]
+                         for ii in comp_inds]) / w_new
+            p_new = sum([self._gaussMix.weights[ii]
+                         * self._gaussMix.covariances[ii]
+                         for ii in comp_inds]) / w_new
+
+            w_lst.append(w_new)
+            m_lst.append(m_new)
+            p_lst.append(p_new)
+
+            loop_inds = loop_inds.symmetric_difference(comp_inds)
+            for ii in comp_inds:
+                self._gaussMix.weights[ii] = -1
+
+        self._gaussMix.weights = w_lst
+        self._gaussMix.means = m_lst
+        self._gaussMix.covariances = p_lst
 
     def cap(self, **kwargs):
         """ Removes least likely hypotheses until a maximum number is reached.
@@ -261,6 +302,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 del self._gaussMix.covariances[index]
             self._gaussMix.weights = [x * (w / sum(self._gaussMix.weights))
                                       for x in self._gaussMix.weights]
+
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
