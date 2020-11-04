@@ -574,22 +574,91 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 self._covs.append(self._gaussMix.covariances[idx[jj]])
 
     def plot_card_dist(self, plt_inds, **kwargs):
-        # stuff
+        """ Plots the current cardinality distribution.
+
+        This assumes that the cardinality distribution has been calculated by
+        the class.
+
+        Keyword Args:
+            f_hndl (Matplotlib figure): Current to figure to plot on. Always
+                plots on axes[0], pass None to create a new figure
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
         f_hndl = kwargs.get('f_hndl', None)
-        true_states = kwargs.get('true_states', None)
-        sig_bnd = kwargs.get('sig_bnd', None)
-        rng = kwargs.get('rng', None)
-        meas_inds = kwargs.get('meas_inds', None)
-        lgnd_loc = kwargs.get('lgnd_loc', None)
+
+        if len(self._card_dist) == 0:
+            raise RuntimeWarning("Empty Cardinality")
+            return f_hndl
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        x_vals = np.arange(0, len(self._card_dist))
+        f_hndl.axes[0].bar(x_vals, self._card_dist)
+
+        f_hndl.axes[0].set_title("Cardinality Distribution")
+        f_hndl.axes[0].set_ylabel("Probability")
+        f_hndl.axes[0].set_xlabel("Cardinality")
+        plt.tight_layout()
+
+        return f_hndl
 
     def plot_card_time_hist(self, plt_inds, **kwargs):
-        # stuff
+        """ Plots the current cardinality time history.
+
+        This assumes that the cardinality distribution has been calculated by
+        the class.
+
+        Keyword Args:
+            f_hndl (Matplotlib figure): Current to figure to plot on. Always
+                plots on axes[0], pass None to create a new figure
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
         f_hndl = kwargs.get('f_hndl', None)
-        true_states = kwargs.get('true_states', None)
-        sig_bnd = kwargs.get('sig_bnd', None)
-        rng = kwargs.get('rng', None)
-        meas_inds = kwargs.get('meas_inds', None)
+        sig_bnd = kwargs.get('sig_bnd', 1)
+        time_vec = kwargs.get('time_vec', None)
         lgnd_loc = kwargs.get('lgnd_loc', None)
+
+        if len(self._card_time_hist) == 0:
+            raise RuntimeWarning("Empty Cardinality")
+            return f_hndl
+
+        stds = [sig_bnd * x[1] for x in self._card_time_hist]
+        n_stds = [-1 * x for x in stds]
+        card = [x[0] for x in self._card_time_hist]
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        if time_vec is None:
+            x_vals = range(0, len(card))
+        else:
+            x_vals = time_vec
+
+        f_hndl.plot(x_vals, card, label='Cardinality', color='k')
+
+        lbl = r'${}\sigma$ Bound'.format(sig_bnd)
+        f_hndl.plot(x_vals, stds, linestyle='--', color='r', label=lbl)
+        f_hndl.plot(x_vals, n_stds, linestyle='--', color='r')
+
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
+
+        f_hndl.axes[0].set_title("Cardinality History")
+        f_hndl.axes[0].set_ylabel("Time")
+        f_hndl.axes[0].set_xlabel("Cardinality")
+
+        plt.tight_layout()
+
+        return f_hndl
 
 
 class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
