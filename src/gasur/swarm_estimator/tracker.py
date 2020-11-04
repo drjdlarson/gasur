@@ -514,7 +514,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         return f_hndl
 
 
-class CardinalizedPHD(RandomFiniteSetBase):
+class CardinalizedPHD(ProbabilityHypothesisDensity):
     """ Cardinalized Probability Hypothesis Density Filter
 
 
