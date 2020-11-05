@@ -14,7 +14,7 @@ from copy import deepcopy
 from gncpy.math import log_sum_exp
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
-from gasur.utilities.plotting import calc_error_ellipse, init_plotting_opts
+import gasur.utilities.plotting as pltUtil
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -121,6 +121,13 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             return self._covs[-1]
         else:
             return []
+
+    @property
+    def cardinality(self):
+        if len(self._states) ==  0:
+            return 0
+        else:
+            return len(self._states[-1])
 
     def predict(self, **kwargs):
         """ Prediction step of the PHD filter.
@@ -318,9 +325,10 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         s_lst = []
         c_lst = []
         for jj in inds:
-            s_lst.append(self._gaussMix.means[jj])
+            num_reps = round(self._gaussMix.weights[jj])
+            s_lst.extend([self._gaussMix.means[jj]] * num_reps)
             if self.save_covs:
-                c_lst.append(self._gaussMix.covariances[jj])
+                c_lst.extend([self._gaussMix.covariances[jj]] * num_reps)
         self._states.append(s_lst)
         if self.save_covs:
             self._covs.append(c_lst)
@@ -374,7 +382,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        opts = init_plotting_opts(**kwargs)
+        opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         true_states = opts['true_states']
         sig_bnd = opts['sig_bnd']
@@ -429,7 +437,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 for ii, sig in enumerate(sigs):
                     if sig is None:
                         continue
-                    w, h, a = calc_error_ellipse(sig, sig_bnd)
+                    w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
                     if not added_sig_lbl:
                         s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
                         e = Ellipse(xy=x[plt_inds, ii], width=w,
@@ -499,9 +507,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                                        color=color, marker='^')
 
         f_hndl.axes[0].grid(True)
-        f_hndl.axes[0].set_title("State Estimates")
-        f_hndl.axes[0].set_ylabel("y-position")
-        f_hndl.axes[0].set_xlabel("x-position")
+        pltUtil.set_title_label(f_hndl, 0, opts, ttl="State Estimates",
+                                x_lbl="x-position", y_lbl="y-position")
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
         plt.tight_layout()
@@ -561,12 +568,17 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         arguments must contain any additional variables needed by those
         functions.
         """
-        idx = np.where(np.asarray(self._gaussMix.weights)>=self.extract_threshold)
-        idx = np.ndarray.flatten(idx[0])
-        if len(idx) != 0:
-            for jj in range(0, len(idx)):
-                self._states.append(self._gaussMix.means[idx[jj]])
-                self._covs.append(self._gaussMix.covariances[idx[jj]])
+        s_weights = np.argsort(self._gaussMix.weights)[::-1]
+        card = np.argmax(self._card_dist)
+        s_lst = []
+        c_lst = []
+        for idx in s_weights[0:card]:
+            s_lst.append(self._gaussMix.means[idx])
+            if self.save_covs:
+                c_lst.append(self._gaussMix.covariances[idx])
+        self._states.append(s_lst)
+        if self.save_covs:
+            self._covs.append(c_lst)
 
     def plot_card_dist(self, plt_inds, **kwargs):
         """ Plots the current cardinality distribution.
@@ -584,7 +596,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        opts = init_plotting_opts(**kwargs)
+        opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
 
         if len(self._card_dist) == 0:
@@ -598,9 +610,9 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         x_vals = np.arange(0, len(self._card_dist))
         f_hndl.axes[0].bar(x_vals, self._card_dist)
 
-        f_hndl.axes[0].set_title("Cardinality Distribution")
-        f_hndl.axes[0].set_ylabel("Probability")
-        f_hndl.axes[0].set_xlabel("Cardinality")
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Cardinality Distribution",
+                                x_lbl="Cardinality", y_lbl="Probability")
         plt.tight_layout()
 
         return f_hndl
@@ -624,7 +636,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        opts = init_plotting_opts(**kwargs)
+        opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         sig_bnd = opts['sig_bnd']
         time_vec = opts['time_vec']
@@ -656,9 +668,10 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
 
-        f_hndl.axes[0].set_title("Cardinality History")
-        f_hndl.axes[0].set_ylabel("Time")
-        f_hndl.axes[0].set_xlabel("Cardinality")
+        plt.grid(True)
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Cardinality History",
+                                x_lbl="Time", y_lbl="Cardinality")
 
         plt.tight_layout()
 
@@ -1351,7 +1364,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        opts = init_plotting_opts(**kwargs)
+        opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         true_states = opts['true_states']
         sig_bnd = opts['sig_bnd']
@@ -1421,7 +1434,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 for tt, sig in enumerate(sigs):
                     if sig is None:
                         continue
-                    w, h, a = calc_error_ellipse(sig, sig_bnd)
+                    w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
                     if not added_sig_lbl:
                         s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
                         e = Ellipse(xy=x[plt_inds, tt], width=w,
@@ -1497,9 +1510,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                                        color=color, marker='^')
 
         f_hndl.axes[0].grid(True)
-        f_hndl.axes[0].set_title("Labeled State Trajectories")
-        f_hndl.axes[0].set_ylabel("y-position")
-        f_hndl.axes[0].set_xlabel("x-position")
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Labeled State Trajectories",
+                                x_lbl="x-position", y_lbl="y-position")
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
         plt.tight_layout()
@@ -1522,7 +1535,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        opts = init_plotting_opts(**kwargs)
+        opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
 
         if len(self._card_dist) == 0:
@@ -1536,9 +1549,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         x_vals = np.arange(0, len(self._card_dist))
         f_hndl.axes[0].bar(x_vals, self._card_dist)
 
-        f_hndl.axes[0].set_title("Cardinality Distribution")
-        f_hndl.axes[0].set_ylabel("Probability")
-        f_hndl.axes[0].set_xlabel("Cardinality")
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Cardinality Distribution",
+                                x_lbl="Cardinality", y_lbl="Probability")
         plt.tight_layout()
 
         return f_hndl

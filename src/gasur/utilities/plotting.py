@@ -73,4 +73,24 @@ def init_plotting_opts(**kwargs):
     opts['rng'] = kwargs.get('rng', rnd.default_rng(1))
     opts['meas_inds'] = kwargs.get('meas_inds', None)
 
+    opts['ttl_fontsize'] = kwargs.get('ttl_fontsize', 12)
+    opts['ttl_fontstyle'] = kwargs.get('ttl_fontstyle', 'normal')
+    opts['ttl_fontfamily'] = kwargs.get('ttl_fontfamily', 'sans-serif')
+
+    opts['ax_fontsize'] = kwargs.get('ax_fontsize', 10)
+    opts['ax_fontstyle'] = kwargs.get('ax_fontstyle', 'normal')
+    opts['ax_fontfamily'] = kwargs.get('ax_fontfamily', 'sans-serif')
+
     return opts
+
+
+def set_title_label(fig, ax_num, opts, ttl="", x_lbl="", y_lbl=""):
+    fig.axes[ax_num].set_title(ttl, fontsize=opts['ttl_fontsize'],
+                               fontstyle=opts['ttl_fontstyle'],
+                               fontfamily=opts['ttl_fontfamily'])
+    fig.axes[ax_num].set_xlabel(x_lbl, fontsize=opts['ax_fontsize'],
+                                fontstyle=opts['ax_fontstyle'],
+                                fontfamily=opts['ax_fontfamily'])
+    fig.axes[ax_num].set_ylabel(y_lbl, fontsize=opts['ax_fontsize'],
+                                fontstyle=opts['ax_fontstyle'],
+                                fontfamily=opts['ax_fontfamily'])
