@@ -364,7 +364,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         two of the state variables (typically x/y position). The error ellipses
         are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
-        Keywrod arguments are processed with
+        Keyword arguments are processed with
         :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
         implements
 
@@ -523,9 +523,10 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
     """
 
     def __init__(self, **kwargs):
-        self.max_expected_card = 5
+        self.max_expected_card = 10
 
-        self._card_dist = [] # local copy for internal modification
+        self._card_dist = np.zeros(self.max_expected_card + 1) # local copy for internal modification
+        self._card_dist[0] = 1
         self._card_time_hist = [] # local copy for internal modification
 
         super().__init__(**kwargs)
@@ -542,6 +543,34 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         """
         super().predict(**kwargs)
+        survive_cdn_predict = np.zeros(self.max_expected_card + 1)
+        for j in range(0, self.max_expected_card):
+            terms = np.zeros((self.max_expected_card + 1, 1)) # is + 1 right?
+            for i in range(j, self.max_expected_card + 1):
+                temp = []
+                temp.append(np.exp(np.sum(np.log(range(1, i + 1)))))
+                temp.append(-np.sum(np.log(range(1, j + 1))))
+                temp.append(np.sum(np.log(range(1, i - j + 1))))
+                temp.append(j * np.log(self.prob_survive))
+                temp.append((i - j) * np.log(self.prob_death)*self._card_dist[i])
+                terms[i, 0] = np.sum(temp)
+            survive_cdn_predict[j] = np.sum(terms)
+            
+        cdn_predict = np.zeros(self.max_expected_card + 1)
+        for n in range(0, self.max_expected_card + 1):
+            terms = np.zeros((self.max_expected_card + 1, 1)) # is + 1 right?
+            for j in range(0, n + 1):
+                temp = []
+                birth = np.zeros(len(self.birth_terms))
+                for b in range(0, len(self.birth_terms)):
+                    birth[b] = self.birth_terms[b][1]
+                temp.append(np.exp(-np.sum(birth)))
+                temp.append((n - j) * np.log(np.sum(birth)))
+                temp.append(-np.sum(np.log(range(1, n - j + 1))) * survive_cdn_predict[j])
+                terms[j, 0] = np.sum(temp)
+            cdn_predict[n] = np.sum(terms)
+        self._card_dist = (cdn_predict/np.sum(cdn_predict)).copy()
+                                
 
     def correct(self, **kwargs):
         """ Correction step of the PHD filter.
@@ -558,6 +587,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         """
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
+        # update self._card_time_hist
 
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
@@ -586,7 +616,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keywrod arguments are processed with
+        Keyword arguments are processed with
         :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
         implements
 
@@ -623,7 +653,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keywrod arguments are processed with
+        Keyword arguments are processed with
         :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
         implements
 

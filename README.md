@@ -56,7 +56,7 @@ Please cite the framework as follows
 
 ```
 @Misc{gasur,
-  author       = {Jordan D. Larson and Ryan W. Thomas and Vaughn Weirens},
+  author       = {Jordan D. Larson and Ryan W. Thomas and Vaughn Weirens and Vincent W. Hill},
   howpublished = {Web page},
   title        = {{GASUR}: A {P}ython library for {G}uidance, navigation, and control of {A}utonomous {S}warms {U}sing {R}andom finite sets},
   year         = {2019},
