@@ -11,7 +11,7 @@ from matplotlib.patches import Ellipse
 import abc
 from copy import deepcopy
 
-from gncpy.math import log_sum_exp
+from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
 import gasur.utilities.plotting as pltUtil
@@ -532,7 +532,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         super().__init__(**kwargs)
 
     def predict(self, **kwargs):
-        """ Prediction step of the PHD filter.
+        """ Prediction step of the CPHD filter.
 
         This predicts new hypothesis, and propogates them to the next time
         step. It also updates the cardinality distribution. Because this calls
@@ -543,17 +543,18 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         """
         super().predict(**kwargs)
+        
         survive_cdn_predict = np.zeros(self.max_expected_card + 1)
         for j in range(0, self.max_expected_card):
             terms = np.zeros((self.max_expected_card + 1, 1)) # is + 1 right?
             for i in range(j, self.max_expected_card + 1):
                 temp = []
-                temp.append(np.exp(np.sum(np.log(range(1, i + 1)))))
+                temp.append(np.sum(np.log(range(1, i + 1))))
                 temp.append(-np.sum(np.log(range(1, j + 1))))
                 temp.append(np.sum(np.log(range(1, i - j + 1))))
                 temp.append(j * np.log(self.prob_survive))
-                temp.append((i - j) * np.log(self.prob_death)*self._card_dist[i])
-                terms[i, 0] = np.sum(temp)
+                temp.append((i - j) * np.log(self.prob_death))
+                terms[i, 0] = np.exp(np.sum(temp)) * self._card_dist[i]
             survive_cdn_predict[j] = np.sum(terms)
             
         cdn_predict = np.zeros(self.max_expected_card + 1)
@@ -564,16 +565,16 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 birth = np.zeros(len(self.birth_terms))
                 for b in range(0, len(self.birth_terms)):
                     birth[b] = self.birth_terms[b][1]
-                temp.append(np.exp(-np.sum(birth)))
+                temp.append(np.sum(birth))
                 temp.append((n - j) * np.log(np.sum(birth)))
-                temp.append(-np.sum(np.log(range(1, n - j + 1))) * survive_cdn_predict[j])
-                terms[j, 0] = np.sum(temp)
+                temp.append(-np.sum(np.log(range(1, n - j + 1))))
+                terms[j, 0] = np.exp(np.sum(temp)) * survive_cdn_predict[j]
             cdn_predict[n] = np.sum(terms)
         self._card_dist = (cdn_predict/np.sum(cdn_predict)).copy()
                                 
 
-    def correct(self, **kwargs):
-        """ Correction step of the PHD filter.
+    def correct(self, **kwargs): # update self._card_time_hist
+        """ Correction step of the CPHD filter.
 
         This corrects the hypotheses based on the measurements and gates the
         measurements according to the class settings. It also updates the
@@ -587,8 +588,131 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         """
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
-        # update self._card_time_hist
+        
+        gmix = deepcopy(self._gaussMix) # predicted gm
+        gmix.weights = [self.prob_miss_detection*x for x in gmix.weights]
+        gm_temp = self.correct_prob_density(meas=meas, probDensity=self._gaussMix,
+                                       **kwargs) 
+            
+    def correct_prob_density(self, meas, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter correction.
 
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
+                probability density to run correction on
+            meas (list): List of measurements, each is a N x 1 numpy array
+
+        Returns:
+            tuple containing
+
+                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
+                  corrected probability density
+                - cost (float): Total cost of for the m best assignment
+        """
+        probDensity = kwargs['probDensity']
+        gm = GaussianMixture()
+        w_pred = np.zeros((len(probDensity.weights), 1))
+        for i in range(0, len(probDensity.weights)):
+            w_pred[i] = probDensity.weights[i]
+        
+        xdim = len(probDensity.means[0])
+        
+        plen = np.size(probDensity.means, axis = 0)
+        zlen = np.size(meas, axis = 0)
+        
+        qz_temp = np.zeros((plen, zlen))
+        mean_temp = np.zeros((zlen, xdim, plen))
+        cov_temp = np.zeros((plen, xdim, xdim))
+        
+        for z_ind in range(0, zlen - 1):
+            for p_ind in range(0, plen - 1):
+                self.filter.cov = probDensity.covariances[p_ind]
+                state = probDensity.means[p_ind]
+                (mean, qz) = self.filter.correct(meas=meas[z_ind], cur_state=state,
+                                                 **kwargs)
+                cov = self.filter.cov
+                qz_temp[p_ind, z_ind] = qz
+                mean_temp[z_ind, :, p_ind ] = np.ndarray.flatten(mean)
+                cov_temp[p_ind, :, :] = cov
+        
+        xivals = np.zeros(zlen)
+        for e in range(0, zlen):
+            xivals[e] = (self.prob_detection*w_pred.T@qz_temp[:, e])/self.clutter_den
+        
+        esfvals_E = get_elem_sym_fnc(xivals)
+        esfvals_D = np.zeros((zlen, zlen))
+        
+        for j in range(0, zlen):
+            xi_temp = xivals.copy()
+            xi_temp = np.delete(xi_temp, j)
+            esfvals_D[:, j] = get_elem_sym_fnc(xi_temp)
+        
+        ups0_E = np.zeros((self.max_expected_card + 1, 1))
+        ups1_E = np.zeros((self.max_expected_card + 1, 1))
+        ups1_D = np.zeros((self.max_expected_card + 1, zlen))
+        
+        for nn in range(0, self.max_expected_card):
+            terms0_E = np.zeros((min(zlen, nn) + 1))
+            for jj in range(0, min(zlen, nn) + 1):
+                temp = []
+                temp.append(-self.clutter_rate+(zlen - jj)*np.log(self.clutter_rate))
+                temp.append(np.sum(np.log(range(1, nn + 1))))
+                temp.append(-np.sum(np.log(range(1, nn - jj))))
+                temp.append((nn - jj) * np.log(self.prob_death))
+                temp.append(-jj * np.log(np.sum(w_pred)) * esfvals_E[jj])
+                terms0_E[jj] = np.exp(np.sum(temp))
+            ups0_E[nn] = np.sum(terms0_E)
+            
+            terms1_E = np.zeros((min(zlen, nn) + 1))
+            for jj in range(0, min(zlen, nn) + 1):
+                if nn >= jj + 1:
+                    temp = []
+                    temp.append(-self.clutter_rate + (zlen - jj) * np.log(self.clutter_rate))
+                    temp.append(np.sum(np.log(range(1, nn))))
+                    temp.append(-np.sum(np.log(range(1, nn-(jj+1)))))
+                    temp.append((nn-(jj+1))*np.log(self.prob_death))
+                    temp.append(-(jj + 1)*np.log(np.sum(w_pred))*esfvals_E[jj])
+                    terms1_E[jj] = np.exp(np.sum(temp))
+            ups1_E[nn] = np.sum(terms1_E)
+            
+            terms1_D = np.zeros((min(zlen-1, nn) + 1, zlen))
+            for ee in range(0, zlen):
+                for jj in range(0, min(zlen-1, nn)):
+                    if nn >= jj + 1:
+                        temp = []
+                        temp.append(-self.clutter_rate + (zlen-1)-jj*self.clutter_rate)
+                        temp.append(np.sum(np.log(range(1, nn))))
+                        temp.append(-np.sum(np.log(range(1, nn-(jj+1)))))
+                        temp.append((nn-(jj+1))*np.log(self.prob_death))
+                        temp.append(-(jj+1)*np.log(np.sum(w_pred))*esfvals_D[jj, ee])
+                        terms1_D[jj, ee] = np.exp(np.sum(temp))
+            ups1_D[nn, :] = np.sum(terms1_D, axis=0)
+        
+        gmix = deepcopy(probDensity)
+        w_update = ((ups1_E.T @ self._card_dist) / (
+            ups0_E.T @ self._card_dist)) * w_pred
+        mean_update = np.concatenate(gmix.means, axis=1)
+        cov_update = np.stack(probDensity.covariances, axis=0)
+        
+        for ee in range(0, zlen):
+            w_temp = ((ups1_D[:, ee].T @ self._card_dist) / (
+                ups0_E.T @ self._card_dist)) * self.prob_detection * qz_temp[:, ee] / self.clutter_den @ w_pred
+            w_update = np.vstack((w_update, w_temp))
+            m_update = np.concatenate((mean_update, mean_temp[ee, :, :]), axis=1)
+            P_update = np.stack((cov_update, cov_temp), axis=0)
+        
+        cdn_update = self._card_dist.copy()
+        for ii in range(0, len(cdn_update)):
+            cdn_update[ii] = ups0_E[ii] * self._card_dist[ii]
+        
+        self._card_dist = cdn_update / np.sum(cdn_update)
+        self._card_time_hist.append(self._card_dist)
+        
+        # still need to transform into a Gaussian Mixture object
+        
+        return gm
+        
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
