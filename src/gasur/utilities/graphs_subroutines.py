@@ -253,3 +253,52 @@ def __aop_comp_assign(assign, dist_mat, n_rows):
             else:
                 assign[row] = -1
     return cost
+
+
+class AStarNode:
+    """
+        A node class for A* Pathfinding
+        parent is parent of the current Node
+        position is current position of the Node in the maze
+        g is cost from start to current Node
+        h is heuristic based estimated cost for current Node to end Node
+        f is total cost of present node i.e. :  f = g + h
+        x and y are Cartesian coordinates of the node
+    """
+
+    def __init__(self, parent=None, position=None):
+        self.parent = parent
+        self.position = position
+
+        self.g = 0
+        self.h = 0
+        self.f = 0
+        self.x = 0
+        self.y = 0
+
+    def __eq__(self, other):
+        return self.position == other.position
+
+
+def astar_return_path(current_node, maze):
+    path = []
+    no_rows, no_columns = np.shape(maze)
+
+    # here we create the initialized result maze with -1 in every position
+    result = [[-1 for i in range(no_columns)] for j in range(no_rows)]
+    current = current_node
+    while current is not None:
+        path.append(current.position)
+        current = current.parent
+
+    # Return reversed path as we need to show from start to end path
+    path = path[::-1]
+    start_value = 0
+
+    # we update the path of start to end found by A-star serch with every step
+    # incremented by 1
+    for i in range(len(path)):
+        result[path[i][0]][path[i][1]] = start_value
+        start_value += 1
+    return result
+

@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import abc
 from copy import deepcopy
+from warnings import warn
 
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
@@ -556,7 +557,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 temp.append((i - j) * np.log(self.prob_death))
                 terms[i, 0] = np.exp(np.sum(temp)) * self._card_dist[i]
             survive_cdn_predict[j] = np.sum(terms)
-            
+
         cdn_predict = np.zeros(self.max_expected_card + 1)
         for n in range(0, self.max_expected_card + 1):
             terms = np.zeros((self.max_expected_card + 1, 1)) # is + 1 right?
@@ -571,7 +572,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 terms[j, 0] = np.exp(np.sum(temp)) * survive_cdn_predict[j]
             cdn_predict[n] = np.sum(terms)
         self._card_dist = (cdn_predict/np.sum(cdn_predict)).copy()
-                                
+
 
     def correct(self, **kwargs): # update self._card_time_hist
         """ Correction step of the CPHD filter.
@@ -786,6 +787,9 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             - time_vec
             - lgnd_loc
 
+        Keyword Args:
+            true_card (array like): List of the true cardinality at each time
+
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
@@ -795,6 +799,8 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         sig_bnd = opts['sig_bnd']
         time_vec = opts['time_vec']
         lgnd_loc = opts['lgnd_loc']
+
+        true_card = kwargs.get('true_card', None)
 
         if len(self._card_time_hist) == 0:
             raise RuntimeWarning("Empty Cardinality")
@@ -818,6 +824,18 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         lbl = r'${}\sigma$ Bound'.format(sig_bnd)
         f_hndl.plot(x_vals, stds, linestyle='--', color='r', label=lbl)
         f_hndl.plot(x_vals, n_stds, linestyle='--', color='r')
+
+        if true_card is not None:
+            if len(true_card) != len(x_vals):
+                c_len = len(true_card)
+                t_len = len(x_vals)
+                msg = "True Cardinality vector length ({})".format(c_len) \
+                    + " does not match time vector length ({})".format(t_len)
+                warn(msg)
+            else:
+                f_hndl.axes[0].plot(x_vals, true_card, color=(0, 0, 0),
+                                    label='True Cardinality',
+                                    linestyle='-')
 
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
