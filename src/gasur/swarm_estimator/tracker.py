@@ -11,6 +11,7 @@ from matplotlib.patches import Ellipse
 import abc
 from copy import deepcopy
 from warnings import warn
+import heapq
 
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
@@ -591,10 +592,14 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         del kwargs['meas']
         
         gmix = deepcopy(self._gaussMix) # predicted gm
-        gmix.weights = [self.prob_miss_detection*x for x in gmix.weights]
-        gm_temp = self.correct_prob_density(meas=meas, probDensity=self._gaussMix,
+        
+        gm = self.correct_prob_density(meas=meas, probDensity=self._gaussMix,
                                        **kwargs) 
-            
+        
+        self._gaussMix.weights = gm.weights.copy()
+        self._gaussMix.means = gm.means.copy()
+        self._gaussMix.covariances = gm.covariances.copy()
+        
     def correct_prob_density(self, meas, **kwargs):
         """ Loops over all elements in a probability distribution and preforms
         the filter correction.
@@ -710,7 +715,25 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         self._card_dist = cdn_update / np.sum(cdn_update)
         self._card_time_hist.append(self._card_dist)
         
-        # still need to transform into a Gaussian Mixture object
+        w_sort = heapq.nlargest(np.size(m_update,axis=1), w_update)
+        
+        weights = []
+        means = []
+        covs = []
+        
+        for ii in range(0, np.size(m_update, axis=1)):
+            weights.append(w_sort[ii])
+            means.append(m_update[:, ii])
+            
+        for jj in range(0, len(cov_update)):
+            covs.append(cov_update[jj])
+        
+        for qq in range(0, len(cov_temp)):
+            covs.append(cov_temp[qq])
+        
+        gm.weights = weights
+        gm.means = means
+        gm.covariances = covs
         
         return gm
         
