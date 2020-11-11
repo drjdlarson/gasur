@@ -1,6 +1,11 @@
 import pytest
 import numpy as np
 import numpy.testing as test
+import numpy.random as rnd
+
+import gasur.swarm_estimator.tracker as tracker
+import gncpy.filters as filters
+import gasur.utilities.distributions as distributions
 
 
 class TestGeneralizedLabeledMultiBernoulli:
@@ -100,3 +105,111 @@ class TestGeneralizedLabeledMultiBernoulli:
                               -0.00380720670474486]).reshape((5, 1))
 
         test.assert_array_almost_equal(act_state, exp_state, decimal=1)
+
+
+def test_STMGeneralizedLabeledMultiBernoulli():
+    rng = rnd.default_rng(1)
+    state_mat = np.array([[1, 0, 1, 0],
+                          [0, 1, 0, 1],
+                          [0, 0, 1, 0],
+                          [0, 0, 0, 1]])
+    pos_bnds = np.array([[-2000, 2000],
+                         [-2000, 2000]])
+    meas_mat = np.array([[1, 0, 0, 0],
+                         [0, 1, 0, 0]])
+
+    proc_noise_dof = 3
+    meas_noise_dof = 3
+
+    proc_noise_scale = 0.01 * np.eye(4)
+    meas_noise_scale = 0.5**2 * np.eye(2)
+
+    filt = filters.StudentsTFilter()
+    filt.set_state_mat(mat=state_mat)
+    filt.set_proc_noise(mat=proc_noise_scale)
+
+    filt.set_meas_mat(mat=meas_mat)
+    filt.meas_noise = meas_noise_scale
+
+    filt.meas_noise_dof = meas_noise_dof
+    filt.proc_noise_dof = proc_noise_dof
+
+    glmb = tracker.STMGeneralizedLabeledMultiBernoulli()
+    glmb.filter = filt
+    glmb.prob_detection = 0.98
+    glmb.prob_survive = 0.99
+
+    dof = 3
+    mu = [np.array([-1500., 250., 0, 0]).reshape((4, 1))]
+    scale = [dof / (dof - 2) * np.diag(np.array([50, 50, 10, 10]))**2]
+    # scale = [np.diag(np.array([50, 50, 10, 10]))**2]
+    stm0 = distributions.StudentsTMixture(means=mu, scalings=scale,
+                                          weights=[1], dof=dof)
+    mu = [np.array([-250., 1000., 0, 0.]).reshape((4, 1))]
+    stm1 = distributions.StudentsTMixture(means=mu, scalings=scale,
+                                          weights=[1], dof=dof)
+    mu = [np.array([250., 750., 0, 0]).reshape((4, 1))]
+    stm2 = distributions.StudentsTMixture(means=mu, scalings=scale,
+                                          weights=[1], dof=dof)
+    mu = [np.array([1000.,  1500., 0, 0]).reshape((4, 1))]
+    stm3 = distributions.StudentsTMixture(means=mu, scalings=scale,
+                                          weights=[1], dof=dof)
+
+    glmb.birth_terms = [(stm0, 0.02), (stm1, 0.02), (stm2, 0.03), (stm3, 0.03)]
+    glmb.req_births = 5
+    glmb.req_surv = 3000
+    glmb.req_upd = 3000
+    glmb.gating_on = False
+    glmb.inv_chi2_gate = 32.2361913029694
+    glmb.clutter_rate = 0.0005
+    glmb.clutter_den = 1 / np.prod(pos_bnds[:, 1] - pos_bnds[:, 0])
+    glmb.save_covs = True
+
+    true_states = []
+    for tt in range(0, 15):
+        glmb.predict(time_step=tt)
+
+        meas = []
+        if tt == 0:
+            m = np.array([-1500 + 5,
+                          250 - 10, 3, 5]).reshape((4, 1))
+            true_states.append(m)
+        elif tt == 3:
+            m = np.array([1000 - 20, 1500 + 18., -2, -6]).reshape((4, 1))
+            true_states.append(m)
+        elif tt == 6:
+            m = np.array([-250 - 10, 1000 + 28, -8, 6]).reshape((4, 1))
+            true_states.append(m)
+        elif tt == 10:
+            m = np.array([250 + 10, 750 - 16., 7, -3]).reshape((4, 1))
+            true_states.append(m)
+
+        for x in true_states:
+            m = meas_mat @ x
+            s_norm = rng.multivariate_normal(np.zeros(m.size),
+                                             meas_noise_scale)
+            s_norm = s_norm.reshape(m.shape)
+            s_chi = rng.chisquare(meas_noise_dof)
+            meas.append(m + s_norm * np.sqrt(meas_noise_dof / s_chi))
+
+        for ii in range(0, len(true_states)):
+            x = true_states[ii]
+            s_norm = rng.multivariate_normal(np.zeros(x.size),
+                                             proc_noise_scale)
+            s_norm = s_norm.reshape(x.shape)
+            s_chi = rng.chisquare(proc_noise_dof)
+            x = state_mat @ x + (s_norm * np.sqrt(proc_noise_dof / s_chi))
+            true_states[ii] = x
+
+        num_clutt = rng.poisson(glmb.clutter_rate)
+        for ii in range(0, num_clutt):
+            m = pos_bnds[:, [0]] + (pos_bnds[:, [1]] - pos_bnds[:, [0]]) \
+                * rng.random((pos_bnds.shape[0], 1))
+            meas.append(m)
+
+        glmb.correct(meas=meas)
+        glmb.prune()
+        glmb.cap()
+
+    glmb.extract_states()
+    assert glmb.cardinality == 4, "Cardinality does not match"
