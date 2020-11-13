@@ -545,10 +545,10 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         """
         super().predict(**kwargs)
-        
+
         survive_cdn_predict = np.zeros(self.max_expected_card + 1)
         for j in range(0, self.max_expected_card):
-            terms = np.zeros((self.max_expected_card + 1, 1)) # is + 1 right?
+            terms = np.zeros((self.max_expected_card + 1, 1))
             for i in range(j, self.max_expected_card + 1):
                 temp = []
                 temp.append(np.sum(np.log(range(1, i + 1))))
@@ -561,7 +561,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         cdn_predict = np.zeros(self.max_expected_card + 1)
         for n in range(0, self.max_expected_card + 1):
-            terms = np.zeros((self.max_expected_card + 1, 1)) # is + 1 right?
+            terms = np.zeros((self.max_expected_card + 1, 1))
             for j in range(0, n + 1):
                 temp = []
                 birth = np.zeros(len(self.birth_terms))
@@ -574,8 +574,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             cdn_predict[n] = np.sum(terms)
         self._card_dist = (cdn_predict/np.sum(cdn_predict)).copy()
 
-
-    def correct(self, **kwargs): # update self._card_time_hist
+    def correct(self, **kwargs):
         """ Correction step of the CPHD filter.
 
         This corrects the hypotheses based on the measurements and gates the
@@ -590,16 +589,18 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         """
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
-        
-        gmix = deepcopy(self._gaussMix) # predicted gm
-        
-        gm = self.correct_prob_density(meas=meas, probDensity=self._gaussMix,
-                                       **kwargs) 
-        
-        self._gaussMix.weights = gm.weights.copy()
-        self._gaussMix.means = gm.means.copy()
-        self._gaussMix.covariances = gm.covariances.copy()
-        
+
+        if self.gating_on:
+            meas = self._gate_meas(meas, self._gaussMix.means,
+                                   self._gaussMix.covariances, **kwargs)
+
+        self._meas_tab.append(meas)
+
+        gmix = deepcopy(self._gaussMix)  # predicted gm
+
+        self._gaussMix = self.correct_prob_density(meas=meas, probDensity=gmix,
+                                                   **kwargs)
+
     def correct_prob_density(self, meas, **kwargs):
         """ Loops over all elements in a probability distribution and preforms
         the filter correction.
@@ -617,20 +618,19 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 - cost (float): Total cost of for the m best assignment
         """
         probDensity = kwargs['probDensity']
-        gm = GaussianMixture()
         w_pred = np.zeros((len(probDensity.weights), 1))
         for i in range(0, len(probDensity.weights)):
             w_pred[i] = probDensity.weights[i]
-        
+
         xdim = len(probDensity.means[0])
-        
-        plen = np.size(probDensity.means, axis = 0)
-        zlen = np.size(meas, axis = 0)
-        
+
+        plen = len(probDensity.means)
+        zlen = len(meas)
+
         qz_temp = np.zeros((plen, zlen))
         mean_temp = np.zeros((zlen, xdim, plen))
         cov_temp = np.zeros((plen, xdim, xdim))
-        
+
         for z_ind in range(0, zlen - 1):
             for p_ind in range(0, plen - 1):
                 self.filter.cov = probDensity.covariances[p_ind]
@@ -639,25 +639,25 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                                                  **kwargs)
                 cov = self.filter.cov
                 qz_temp[p_ind, z_ind] = qz
-                mean_temp[z_ind, :, p_ind ] = np.ndarray.flatten(mean)
-                cov_temp[p_ind, :, :] = cov
-        
+                mean_temp[z_ind, :, p_ind] = np.ndarray.flatten(mean)
+                cov_temp[[p_ind], :, :] = cov
+
         xivals = np.zeros(zlen)
         for e in range(0, zlen):
             xivals[e] = (self.prob_detection*w_pred.T@qz_temp[:, e])/self.clutter_den
-        
+
         esfvals_E = get_elem_sym_fnc(xivals)
         esfvals_D = np.zeros((zlen, zlen))
-        
+
         for j in range(0, zlen):
             xi_temp = xivals.copy()
             xi_temp = np.delete(xi_temp, j)
             esfvals_D[:, j] = get_elem_sym_fnc(xi_temp)
-        
+
         ups0_E = np.zeros((self.max_expected_card + 1, 1))
         ups1_E = np.zeros((self.max_expected_card + 1, 1))
         ups1_D = np.zeros((self.max_expected_card + 1, zlen))
-        
+
         for nn in range(0, self.max_expected_card):
             terms0_E = np.zeros((min(zlen, nn) + 1))
             for jj in range(0, min(zlen, nn) + 1):
@@ -669,7 +669,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 temp.append(-jj * np.log(np.sum(w_pred)) * esfvals_E[jj])
                 terms0_E[jj] = np.exp(np.sum(temp))
             ups0_E[nn] = np.sum(terms0_E)
-            
+
             terms1_E = np.zeros((min(zlen, nn) + 1))
             for jj in range(0, min(zlen, nn) + 1):
                 if nn >= jj + 1:
@@ -681,7 +681,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                     temp.append(-(jj + 1)*np.log(np.sum(w_pred))*esfvals_E[jj])
                     terms1_E[jj] = np.exp(np.sum(temp))
             ups1_E[nn] = np.sum(terms1_E)
-            
+
             terms1_D = np.zeros((min(zlen-1, nn) + 1, zlen))
             for ee in range(0, zlen):
                 for jj in range(0, min(zlen-1, nn)):
@@ -694,49 +694,31 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                         temp.append(-(jj+1)*np.log(np.sum(w_pred))*esfvals_D[jj, ee])
                         terms1_D[jj, ee] = np.exp(np.sum(temp))
             ups1_D[nn, :] = np.sum(terms1_D, axis=0)
-        
+
         gmix = deepcopy(probDensity)
         w_update = ((ups1_E.T @ self._card_dist) / (
             ups0_E.T @ self._card_dist)) * w_pred
-        mean_update = np.concatenate(gmix.means, axis=1)
-        cov_update = np.stack(probDensity.covariances, axis=0)
-        
+
+        gmix.weights = [x.item() for x in w_update]
+
         for ee in range(0, zlen):
-            w_temp = ((ups1_D[:, ee].T @ self._card_dist) / (
-                ups0_E.T @ self._card_dist)) * self.prob_detection * qz_temp[:, ee] / self.clutter_den @ w_pred
-            w_update = np.vstack((w_update, w_temp))
-            m_update = np.concatenate((mean_update, mean_temp[ee, :, :]), axis=1)
-            P_update = np.stack((cov_update, cov_temp), axis=0)
-        
+            wt_1 = ((ups1_D[:, [ee]].T @ self._card_dist) / (ups0_E.T @ self._card_dist)).reshape((1, 1))
+            wt_2 = self.prob_detection * qz_temp[:, [ee]] / self.clutter_den * w_pred
+            w_temp = wt_1 * wt_2
+            for ww in range(0, w_temp.shape[0]):
+                gmix.weights.append(w_temp[ww].item())
+                gmix.means.append(mean_temp[ee, :, ww].reshape((xdim, 1)))
+                gmix.covariances.append(cov_temp[ww, :, :])
+
         cdn_update = self._card_dist.copy()
         for ii in range(0, len(cdn_update)):
             cdn_update[ii] = ups0_E[ii] * self._card_dist[ii]
-        
+
         self._card_dist = cdn_update / np.sum(cdn_update)
-        self._card_time_hist.append(self._card_dist)
-        
-        w_sort = heapq.nlargest(np.size(m_update,axis=1), w_update)
-        
-        weights = []
-        means = []
-        covs = []
-        
-        for ii in range(0, np.size(m_update, axis=1)):
-            weights.append(w_sort[ii])
-            means.append(m_update[:, ii])
-            
-        for jj in range(0, len(cov_update)):
-            covs.append(cov_update[jj])
-        
-        for qq in range(0, len(cov_temp)):
-            covs.append(cov_temp[qq])
-        
-        gm.weights = weights
-        gm.means = means
-        gm.covariances = covs
-        
-        return gm
-        
+        self._card_time_hist.append((self._card_dist, np.std(self._card_dist)))
+
+        return gmix
+
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
 
