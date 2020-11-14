@@ -11,7 +11,6 @@ from matplotlib.patches import Ellipse
 import abc
 from copy import deepcopy
 from warnings import warn
-import heapq
 
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
@@ -527,9 +526,9 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
     def __init__(self, **kwargs):
         self.max_expected_card = 10
 
-        self._card_dist = np.zeros(self.max_expected_card + 1) # local copy for internal modification
+        self._card_dist = np.zeros(self.max_expected_card + 1)  # local copy for internal modification
         self._card_dist[0] = 1
-        self._card_time_hist = [] # local copy for internal modification
+        self._card_time_hist = []  # local copy for internal modification
 
         super().__init__(**kwargs)
 
@@ -631,11 +630,12 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         mean_temp = np.zeros((zlen, xdim, plen))
         cov_temp = np.zeros((plen, xdim, xdim))
 
-        for z_ind in range(0, zlen - 1):
-            for p_ind in range(0, plen - 1):
+        for z_ind in range(0, zlen):
+            for p_ind in range(0, plen):
                 self.filter.cov = probDensity.covariances[p_ind]
                 state = probDensity.means[p_ind]
-                (mean, qz) = self.filter.correct(meas=meas[z_ind], cur_state=state,
+                (mean, qz) = self.filter.correct(meas=meas[z_ind],
+                                                 cur_state=state,
                                                  **kwargs)
                 cov = self.filter.cov
                 qz_temp[p_ind, z_ind] = qz
@@ -643,8 +643,12 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 cov_temp[[p_ind], :, :] = cov
 
         xivals = np.zeros(zlen)
+        pdc = self.prob_detection/self.clutter_den
         for e in range(0, zlen):
-            xivals[e] = (self.prob_detection*w_pred.T@qz_temp[:, e])/self.clutter_den
+            xilog = 1
+            for c in range(0, len(w_pred)):
+                xilog = xilog * np.exp(qz_temp[c, e]) ** (w_pred[c]*pdc)
+            xivals[e] = np.log(xilog)
 
         esfvals_E = get_elem_sym_fnc(xivals)
         esfvals_D = np.zeros((zlen, zlen))
@@ -740,7 +744,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         if self.save_covs:
             self._covs.append(c_lst)
 
-    def plot_card_dist(self, plt_inds, **kwargs):
+    def plot_card_dist(self, **kwargs):
         """ Plots the current cardinality distribution.
 
         This assumes that the cardinality distribution has been calculated by
