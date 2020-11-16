@@ -972,6 +972,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             return []
         return self._covs
 
+    @property
+    def cardinality(self):
+        """ The cardinality estimate
+        """
+        return np.argmax(self._card_dist)
+
     def predict(self, **kwargs):
         """ Prediction step of the GLMB filter.
 
@@ -1324,11 +1330,15 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                    if a in self._lab_mem]
         new_ii = [labels.index(a) for a in either if a in labels]
 
-        self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
-            + [labels[ii] for ii in surv_ii] \
+        # self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
+        #     + [labels[ii] for ii in surv_ii] \
+        #     + [labels[ii] for ii in new_ii]
+        # self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
+        #     + [meas_hists[ii] for ii in surv_ii] \
+        #     + [meas_hists[ii] for ii in new_ii]
+        self._lab_mem = [labels[ii] for ii in surv_ii] \
             + [labels[ii] for ii in new_ii]
-        self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
-            + [meas_hists[ii] for ii in surv_ii] \
+        self._meas_asoc_mem = [meas_hists[ii] for ii in surv_ii] \
             + [meas_hists[ii] for ii in new_ii]
 
         self._states = [None] * len(self._meas_tab)
@@ -1578,13 +1588,15 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         # get state dimension
         for states in s_lst:
-            if len(states) > 0:
+            if states is not None and len(states) > 0:
                 x_dim = states[0].size
                 break
 
         # get unique labels
         u_lbls = []
         for lbls in l_lst:
+            if lbls is None:
+                continue
             for lbl in lbls:
                 if lbl not in u_lbls:
                     u_lbls.append(lbl)
@@ -1599,6 +1611,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             if show_sig:
                 sigs = [None] * len(s_lst)
             for tt, lbls in enumerate(l_lst):
+                if lbls is None:
+                    continue
                 if lbl in lbls:
                     ii = lbls.index(lbl)
                     x[:, [tt]] = s_lst[tt][ii].copy()
@@ -1761,8 +1775,9 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 predicted probability density
         """
         probDensity = kwargs['probDensity']
+        self.filter.dof = probDensity.dof
         pd_tup = zip(probDensity.means,
-                     probDensity.sclaings)
+                     probDensity.scalings)
         c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
         pd = StudentsTMixture()
         pd.weights = probDensity.weights.copy()
@@ -1793,13 +1808,14 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         """
         probDensity = kwargs['probDensity']
 
+        self.filter.dof = probDensity.dof
         pd = StudentsTMixture()
         for jj in range(0, len(probDensity.means)):
             self.filter.scale = probDensity.scalings[jj]
             state = probDensity.means[jj]
             (mean, qz) = self.filter.correct(meas=meas, cur_state=state,
                                              **kwargs)
-            scale = self.filter.scalings
+            scale = self.filter.scale.copy()
             w = qz * probDensity.weights[jj]
             pd.means.append(mean)
             pd.scalings.append(scale)
@@ -1812,4 +1828,30 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             pd.weights[jj] /= cost
         return (pd, cost)
 
+    def _gate_meas(self, meas, means, covs, **kwargs):
+        if len(meas) == 0:
+            return []
 
+        scalings = []
+        for ent in self._track_tab:
+            scalings.extend(ent.probDensity.scalings)
+
+        valid = []
+        for (m, p) in zip(means, scalings):
+            meas_mat = self.filter.get_meas_mat(m, **kwargs)
+            est = self.filter.get_est_meas(m, **kwargs)
+            factor = self.filter.meas_noise_dof * (self.filter.dof - 2) \
+                / (self.filter.dof * (self.filter.meas_noise_dof - 2))
+            P_zz = meas_mat @ p @ meas_mat.T + factor * self.filter.meas_noise
+            inv_P = inv(P_zz)
+
+            for (ii, z) in enumerate(meas):
+                if ii in valid:
+                    continue
+                innov = z - est
+                dist = innov.T @ inv_P @ innov
+                if dist < self.inv_chi2_gate:
+                    valid.append(ii)
+
+        valid.sort()
+        return [meas[ii] for ii in valid]
