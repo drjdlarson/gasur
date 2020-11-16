@@ -144,7 +144,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self._gaussMix = self.predict_prob_density(probDensity=self._gaussMix,
                                                    **kwargs)
 
-        for (gm, _) in self.birth_terms:
+        for gm in self.birth_terms:
             self._gaussMix.weights.extend(gm.weights)
             self._gaussMix.means.extend(gm.means)
             self._gaussMix.covariances.extend(gm.covariances)
@@ -565,7 +565,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 temp = []
                 birth = np.zeros(len(self.birth_terms))
                 for b in range(0, len(self.birth_terms)):
-                    birth[b] = self.birth_terms[b][1]
+                    birth[b] = self.birth_terms[b].weights[0]
                 temp.append(np.sum(birth))
                 temp.append((n - j) * np.log(np.sum(birth)))
                 temp.append(-np.sum(np.log(range(1, n - j + 1))))
@@ -610,11 +610,8 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             meas (list): List of measurements, each is a N x 1 numpy array
 
         Returns:
-            tuple containing
-
                 - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
                   corrected probability density
-                - cost (float): Total cost of for the m best assignment
         """
         probDensity = kwargs['probDensity']
         w_pred = np.zeros((len(probDensity.weights), 1))
@@ -645,10 +642,12 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         xivals = np.zeros(zlen)
         pdc = self.prob_detection/self.clutter_den
         for e in range(0, zlen):
-            xilog = 1
-            for c in range(0, len(w_pred)):
-                xilog = xilog * np.exp(qz_temp[c, e]) ** (w_pred[c]*pdc)
-            xivals[e] = np.log(xilog)
+            xivals[e] = pdc * np.dot(w_pred.T, qz_temp[:, [e]])
+            # xilog = []
+            # for c in range(0, len(w_pred)):
+            #     xilog.append(np.log(w_pred[[c]]).item())
+            #     xilog.append(np.log(qz_temp[c, e]))
+            # xivals[e] = np.exp(np.log(pdc) + np.sum(xilog))
 
         esfvals_E = get_elem_sym_fnc(xivals)
         esfvals_D = np.zeros((zlen, zlen))
@@ -662,13 +661,13 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         ups1_E = np.zeros((self.max_expected_card + 1, 1))
         ups1_D = np.zeros((self.max_expected_card + 1, zlen))
 
-        for nn in range(0, self.max_expected_card):
+        for nn in range(0, self.max_expected_card + 1):
             terms0_E = np.zeros((min(zlen, nn) + 1))
             for jj in range(0, min(zlen, nn) + 1):
                 temp = []
                 temp.append(-self.clutter_rate+(zlen - jj)*np.log(self.clutter_rate))
                 temp.append(np.sum(np.log(range(1, nn + 1))))
-                temp.append(-np.sum(np.log(range(1, nn - jj))))
+                temp.append(-np.sum(np.log(range(1, nn - jj + 1))))
                 temp.append((nn - jj) * np.log(self.prob_death))
                 temp.append(-jj * np.log(np.sum(w_pred)) * esfvals_E[jj])
                 terms0_E[jj] = np.exp(np.sum(temp))
@@ -677,26 +676,26 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             terms1_E = np.zeros((min(zlen, nn) + 1))
             for jj in range(0, min(zlen, nn) + 1):
                 if nn >= jj + 1:
-                    temp = []
-                    temp.append(-self.clutter_rate + (zlen - jj) * np.log(self.clutter_rate))
-                    temp.append(np.sum(np.log(range(1, nn))))
-                    temp.append(-np.sum(np.log(range(1, nn-(jj+1)))))
-                    temp.append((nn-(jj+1))*np.log(self.prob_death))
-                    temp.append(-(jj + 1)*np.log(np.sum(w_pred))*esfvals_E[jj])
-                    terms1_E[jj] = np.exp(np.sum(temp))
+                    temp1 = []
+                    temp1.append(-self.clutter_rate + (zlen - jj) * np.log(self.clutter_rate))
+                    temp1.append(np.sum(np.log(range(1, nn + 1))))
+                    temp1.append(-np.sum(np.log(range(1, nn-(jj + 1) + 1))))
+                    temp1.append((nn-(jj+1))*np.log(self.prob_death))
+                    temp1.append(-(jj + 1)*np.log(np.sum(w_pred))*esfvals_E[jj])
+                    terms1_E[jj] = np.exp(np.sum(temp1))
             ups1_E[nn] = np.sum(terms1_E)
 
             terms1_D = np.zeros((min(zlen-1, nn) + 1, zlen))
             for ee in range(0, zlen):
                 for jj in range(0, min(zlen-1, nn)):
                     if nn >= jj + 1:
-                        temp = []
-                        temp.append(-self.clutter_rate + (zlen-1)-jj*self.clutter_rate)
-                        temp.append(np.sum(np.log(range(1, nn))))
-                        temp.append(-np.sum(np.log(range(1, nn-(jj+1)))))
-                        temp.append((nn-(jj+1))*np.log(self.prob_death))
-                        temp.append(-(jj+1)*np.log(np.sum(w_pred))*esfvals_D[jj, ee])
-                        terms1_D[jj, ee] = np.exp(np.sum(temp))
+                        temp2 = []
+                        temp2.append(-self.clutter_rate + (zlen-1)-jj*self.clutter_rate)
+                        temp2.append(np.sum(np.log(range(1, nn) + 1)))
+                        temp2.append(-np.sum(np.log(range(1, nn-(jj+1) + 1))))
+                        temp2.append((nn-(jj+1))*np.log(self.prob_death))
+                        temp2.append(-(jj+1)*np.log(np.sum(w_pred))*esfvals_D[jj, ee])
+                        terms1_D[jj, ee] = np.exp(np.sum(temp2))
             ups1_D[nn, :] = np.sum(terms1_D, axis=0)
 
         gmix = deepcopy(probDensity)
@@ -737,7 +736,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         s_lst = []
         c_lst = []
         for idx in s_weights[0:card]:
-            s_lst.append(self._gaussMix.means[idx])
+            s_lst.extend(deepcopy(self._gaussMix.means[idx]))
             if self.save_covs:
                 c_lst.append(self._gaussMix.covariances[idx])
         self._states.append(s_lst)
@@ -781,7 +780,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         return f_hndl
 
-    def plot_card_time_hist(self, plt_inds, **kwargs):
+    def plot_card_time_hist(self, **kwargs):
         """ Plots the current cardinality time history.
 
         This assumes that the cardinality distribution has been calculated by
