@@ -655,48 +655,56 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         for j in range(0, zlen):
             xi_temp = xivals.copy()
             xi_temp = np.delete(xi_temp, j)
-            esfvals_D[:, j] = get_elem_sym_fnc(xi_temp)
+            esfvals_D[:, [j]] = get_elem_sym_fnc(xi_temp)
 
         ups0_E = np.zeros((self.max_expected_card + 1, 1))
         ups1_E = np.zeros((self.max_expected_card + 1, 1))
         ups1_D = np.zeros((self.max_expected_card + 1, zlen))
 
+        tot_w_pred = sum(w_pred)
         for nn in range(0, self.max_expected_card + 1):
             terms0_E = np.zeros((min(zlen, nn) + 1))
             for jj in range(0, min(zlen, nn) + 1):
-                temp = []
-                temp.append(-self.clutter_rate+(zlen - jj)*np.log(self.clutter_rate))
-                temp.append(np.sum(np.log(range(1, nn + 1))))
-                temp.append(-np.sum(np.log(range(1, nn - jj + 1))))
-                temp.append((nn - jj) * np.log(self.prob_death))
-                temp.append(-jj * np.log(np.sum(w_pred)) * esfvals_E[jj])
-                terms0_E[jj] = np.exp(np.sum(temp))
+                t1 = -self.clutter_rate + (zlen - jj) \
+                    * np.log(self.clutter_rate)
+                t2 = sum([np.log(x) for x in range(1, nn + 1)])
+                t3 = -1 * sum([np.log(x) for x in range(1, nn - jj + 1)])
+                t4 = (nn - jj) * np.log(self.prob_death)
+                t5 = -jj * np.log(tot_w_pred)
+                terms0_E[jj] = np.exp(t1 + t2 + t3 + t4 + t5) * esfvals_E[jj]
             ups0_E[nn] = np.sum(terms0_E)
 
             terms1_E = np.zeros((min(zlen, nn) + 1))
             for jj in range(0, min(zlen, nn) + 1):
                 if nn >= jj + 1:
-                    temp1 = []
-                    temp1.append(-self.clutter_rate + (zlen - jj) * np.log(self.clutter_rate))
-                    temp1.append(np.sum(np.log(range(1, nn + 1))))
-                    temp1.append(-np.sum(np.log(range(1, nn-(jj + 1) + 1))))
-                    temp1.append((nn-(jj+1))*np.log(self.prob_death))
-                    temp1.append(-(jj + 1)*np.log(np.sum(w_pred))*esfvals_E[jj])
-                    terms1_E[jj] = np.exp(np.sum(temp1))
+                    t1 = -self.clutter_rate + (zlen - jj) \
+                        * np.log(self.clutter_rate)
+                    t2 = sum([np.log(x) for x in range(1, nn + 1)])
+                    t3 = -1 * sum([np.log(x)
+                                   for x in range(1, nn - (jj + 1) + 1)])
+                    t4 = (nn - (jj + 1)) * np.log(self.prob_death)
+                    t5 = -(jj + 1) * np.log(tot_w_pred)
+                    terms1_E[jj] = np.exp(t1 + t2 + t3 + t4 + t5) \
+                        * esfvals_E[jj]
             ups1_E[nn] = np.sum(terms1_E)
 
-            terms1_D = np.zeros((min(zlen-1, nn) + 1, zlen))
-            for ee in range(0, zlen):
-                for jj in range(0, min(zlen-1, nn)):
-                    if nn >= jj + 1:
-                        temp2 = []
-                        temp2.append(-self.clutter_rate + (zlen-1)-jj*self.clutter_rate)
-                        temp2.append(np.sum(np.log(range(1, nn) + 1)))
-                        temp2.append(-np.sum(np.log(range(1, nn-(jj+1) + 1))))
-                        temp2.append((nn-(jj+1))*np.log(self.prob_death))
-                        temp2.append(-(jj+1)*np.log(np.sum(w_pred))*esfvals_D[jj, ee])
-                        terms1_D[jj, ee] = np.exp(np.sum(temp2))
-            ups1_D[nn, :] = np.sum(terms1_D, axis=0)
+            if zlen != 0:
+                terms1_D = np.zeros((min(zlen - 1, nn) + 1, zlen))
+                for ell in range(1, zlen + 1):
+                    for jj in range(0, min((zlen - 1), nn) + 1):
+                        if nn >= jj + 1:
+                            t1 = -self.clutter_rate + ((zlen - 1) - jj) \
+                                * np.log(self.clutter_rate)
+                            t2 = sum([np.log(x) for x in range(1, nn + 1)])
+                            t3 = -1 * sum([np.log(x)
+                                           for x in range(1,
+                                                          nn - (jj + 1) + 1)])
+                            t4 = (nn - (jj + 1)) * np.log(self.prob_death)
+                            t5 = -(jj + 1) * np.log(tot_w_pred)
+                            terms1_D[jj, ell - 1] = np.exp(t1 + t2 + t3
+                                                           + t4 + t5) \
+                                * esfvals_D[jj, ell - 1]
+                ups1_D[nn, :] = np.sum(terms1_D, axis=0)
 
         gmix = deepcopy(probDensity)
         w_update = ((ups1_E.T @ self._card_dist) / (
@@ -718,7 +726,8 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             cdn_update[ii] = ups0_E[ii] * self._card_dist[ii]
 
         self._card_dist = cdn_update / np.sum(cdn_update)
-        self._card_time_hist.append((self._card_dist, np.std(self._card_dist)))
+        self._card_time_hist.append((np.argmax(self._card_dist).item(),
+                                     np.std(self._card_dist)))
 
         return gmix
 
@@ -736,7 +745,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         s_lst = []
         c_lst = []
         for idx in s_weights[0:card]:
-            s_lst.extend(deepcopy(self._gaussMix.means[idx]))
+            s_lst.append(self._gaussMix.means[idx])
             if self.save_covs:
                 c_lst.append(self._gaussMix.covariances[idx])
         self._states.append(s_lst)
@@ -815,7 +824,6 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             return f_hndl
 
         stds = [sig_bnd * x[1] for x in self._card_time_hist]
-        n_stds = [-1 * x for x in stds]
         card = [x[0] for x in self._card_time_hist]
 
         if f_hndl is None:
@@ -823,15 +831,17 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             f_hndl.add_subplot(1, 1, 1)
 
         if time_vec is None:
-            x_vals = range(0, len(card))
+            x_vals = [ii for ii in range(0, len(card))]
         else:
             x_vals = time_vec
 
-        f_hndl.plot(x_vals, card, label='Cardinality', color='k')
+        f_hndl.axes[0].plot(x_vals, card, label='Cardinality', color='k')
 
         lbl = r'${}\sigma$ Bound'.format(sig_bnd)
-        f_hndl.plot(x_vals, stds, linestyle='--', color='r', label=lbl)
-        f_hndl.plot(x_vals, n_stds, linestyle='--', color='r')
+        f_hndl.axes[0].plot(x_vals, [x + s for (x, s) in zip(card, stds)],
+                            linestyle='--', color='r', label=lbl)
+        f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
+                            linestyle='--', color='r')
 
         if true_card is not None:
             if len(true_card) != len(x_vals):
