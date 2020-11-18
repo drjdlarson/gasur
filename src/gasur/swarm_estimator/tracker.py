@@ -35,6 +35,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.birth_terms = []
         self.clutter_rate = 0
         self.clutter_den = 0
+
+        self.debug_plots = False
         super().__init__(**kwargs)
 
     @property
@@ -87,7 +89,6 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self._states = []  # local copy for internal modification
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._covs = []  # local copy for internal modification
-
         super().__init__(**kwargs)
 
     @property
@@ -449,7 +450,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                         e = Ellipse(xy=x[plt_inds, ii], width=w,
                                     height=h, angle=a, zorder=-10000)
                     e.set_clip_box(f_hndl.axes[0].bbox)
-                    e.set_alpha(0.2)
+                    e.set_alpha(0.15)
                     e.set_facecolor(color)
                     f_hndl.axes[0].add_patch(e)
 
@@ -502,10 +503,12 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             if not added_meas_lbl:
                 f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
                                        color=color, marker='^',
+                                       edgecolors =(0, 0, 0),
                                        label='Measurements')
             else:
                 f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
-                                       color=color, marker='^')
+                                       color=color, marker='^',
+                                       edgecolors =(0, 0, 0))
 
         f_hndl.axes[0].grid(True)
         pltUtil.set_title_label(f_hndl, 0, opts, ttl="State Estimates",
@@ -524,13 +527,29 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
     """
 
     def __init__(self, **kwargs):
-        self.max_expected_card = 10
+        self.agents_per_state = []
+        self._max_expected_card = 10
 
         self._card_dist = np.zeros(self.max_expected_card + 1)  # local copy for internal modification
         self._card_dist[0] = 1
         self._card_time_hist = []  # local copy for internal modification
+        self._n_states_per_time = []
 
         super().__init__(**kwargs)
+
+    @property
+    def max_expected_card(self):
+        return self._max_expected_card
+
+    @max_expected_card.setter
+    def max_expected_card(self, x):
+        self._card_dist = np.zeros(x + 1)
+        self._card_dist[0] = 1
+        self._max_expected_card = x
+
+    @property
+    def cardinality(self):
+        return np.argmax(self._card_dist)
 
     def predict(self, **kwargs):
         """ Prediction step of the CPHD filter.
@@ -741,16 +760,29 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         functions.
         """
         s_weights = np.argsort(self._gaussMix.weights)[::-1]
-        card = np.argmax(self._card_dist)
         s_lst = []
         c_lst = []
-        for idx in s_weights[0:card]:
+        self.agents_per_state = []
+        ii = 0
+        tot_agents = 0
+        while ii < s_weights.size and tot_agents < self.cardinality:
+            idx = s_weights[ii]
+
+            n_agents = round(self._gaussMix.weights[idx])
+            tot_agents += n_agents
+            self.agents_per_state.append(n_agents)
+
             s_lst.append(self._gaussMix.means[idx])
             if self.save_covs:
                 c_lst.append(self._gaussMix.covariances[idx])
+
+            ii += 1
+
         self._states.append(s_lst)
         if self.save_covs:
             self._covs.append(c_lst)
+        if self.debug_plots:
+            self._n_states_per_time.append(ii)
 
     def plot_card_dist(self, **kwargs):
         """ Plots the current cardinality distribution.
@@ -835,14 +867,6 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         else:
             x_vals = time_vec
 
-        f_hndl.axes[0].plot(x_vals, card, label='Cardinality', color='k')
-
-        lbl = r'${}\sigma$ Bound'.format(sig_bnd)
-        f_hndl.axes[0].plot(x_vals, [x + s for (x, s) in zip(card, stds)],
-                            linestyle='--', color='r', label=lbl)
-        f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
-                            linestyle='--', color='r')
-
         if true_card is not None:
             if len(true_card) != len(x_vals):
                 c_len = len(true_card)
@@ -851,9 +875,18 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                     + " does not match time vector length ({})".format(t_len)
                 warn(msg)
             else:
-                f_hndl.axes[0].plot(x_vals, true_card, color=(0, 0, 0),
+                f_hndl.axes[0].plot(x_vals, true_card, color='g',
                                     label='True Cardinality',
                                     linestyle='-')
+
+        f_hndl.axes[0].plot(x_vals, card, label='Cardinality', color='k',
+                            linestyle='--')
+
+        lbl = r'${}\sigma$ Bound'.format(sig_bnd)
+        f_hndl.axes[0].plot(x_vals, [x + s for (x, s) in zip(card, stds)],
+                            linestyle='--', color='r', label=lbl)
+        f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
+                            linestyle='--', color='r')
 
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
@@ -864,6 +897,33 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                                 x_lbl="Time", y_lbl="Cardinality")
 
         plt.tight_layout()
+
+        return f_hndl
+
+    def plot_number_states_per_time(self, **kwargs):
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        lgnd_loc = opts['lgnd_loc']
+
+        if not self.debug_plots:
+            msg = 'Debug plots turned off'
+            warn(msg)
+            return f_hndl
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
+
+        x_vals = [ii for ii in range(0, len(self._n_states_per_time))]
+
+        f_hndl.axes[0].plot(x_vals, self._n_states_per_time);
+        plt.grid(True)
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="States per Timestep",
+                                x_lbl="Time", y_lbl="Cardinality")
 
         return f_hndl
 

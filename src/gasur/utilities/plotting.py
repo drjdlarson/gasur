@@ -34,7 +34,7 @@ def calc_error_ellipse(cov, n_sig):
     angle = 180 / np.pi * np.arctan2(*vecs[:, 0][::-1])
     width, height = 2 * n_sig * np.sqrt(vals)
 
-    return width, height, angle
+    return 2*width, 2*height, angle
 
 
 def init_plotting_opts(**kwargs):
