@@ -300,5 +300,11 @@ def astar_return_path(current_node, maze):
     for i in range(len(path)):
         result[path[i][0]][path[i][1]] = start_value
         start_value += 1
-    return result
+
+    inds = np.argwhere(np.array(result) >= 0)
+    vals = [result[r][c] for r, c in inds]
+    s_inds = np.argsort(vals)
+    vals = [vals[ii] for ii in s_inds]
+
+    return (tuple([(inds[ii][0], inds[ii][1]) for ii in s_inds]), sum(vals))
 
