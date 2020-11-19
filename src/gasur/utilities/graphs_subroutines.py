@@ -287,10 +287,10 @@ def astar_return_path(current_node, maze):
     # here we create the initialized result maze with -1 in every position
     result = [[-1 for i in range(no_columns)] for j in range(no_rows)]
     current = current_node
-    # total_cost = []
+    total_cost = []
     while current is not None:
         path.append(current.position)
-        # total_cost.append(current.h)
+        total_cost.append(current.h)
         current = current.parent
 
     # Return reversed path as we need to show from start to end path
@@ -308,4 +308,4 @@ def astar_return_path(current_node, maze):
     s_inds = np.argsort(vals)
     vals = [vals[ii] for ii in s_inds]
 
-    return (tuple([(inds[ii][0], inds[ii][1]) for ii in s_inds]), len(path))
+    return (tuple([(inds[ii][0], inds[ii][1]) for ii in s_inds]), max(total_cost))
