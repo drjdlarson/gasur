@@ -855,7 +855,8 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             raise RuntimeWarning("Empty Cardinality")
             return f_hndl
 
-        stds = [sig_bnd * x[1] for x in self._card_time_hist]
+        if sig_bnd is not None:
+            stds = [sig_bnd * x[1] for x in self._card_time_hist]
         card = [x[0] for x in self._card_time_hist]
 
         if f_hndl is None:
@@ -882,11 +883,12 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         f_hndl.axes[0].plot(x_vals, card, label='Cardinality', color='k',
                             linestyle='--')
 
-        lbl = r'${}\sigma$ Bound'.format(sig_bnd)
-        f_hndl.axes[0].plot(x_vals, [x + s for (x, s) in zip(card, stds)],
-                            linestyle='--', color='r', label=lbl)
-        f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
-                            linestyle='--', color='r')
+        if sig_bnd is not None:
+            lbl = r'${}\sigma$ Bound'.format(sig_bnd)
+            f_hndl.axes[0].plot(x_vals, [x + s for (x, s) in zip(card, stds)],
+                                linestyle='--', color='r', label=lbl)
+            f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
+                                linestyle='--', color='r')
 
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
