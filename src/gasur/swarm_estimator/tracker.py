@@ -730,9 +730,9 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 ups1_D[nn, :] = np.sum(terms1_D, axis=0)
 
         gmix = deepcopy(probDensity)
-        w_update = np.log(ups1_E.T @ self._card_dist) \
-            - np.log(ups0_E.T @ self._card_dist) + np.log(w_pred)
-        w_update = np.exp(w_update)
+        w_update = ((ups1_E.T @ self._card_dist)
+                    / (ups0_E.T @ self._card_dist)) * self.prob_miss_detection * w_pred
+        # w_update = np.exp(w_update)
 
         gmix.weights = [x.item() for x in w_update]
 
