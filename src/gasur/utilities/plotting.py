@@ -57,6 +57,14 @@ def init_plotting_opts(**kwargs):
                 if this is specified all available measurements will be
                 plotted. Note, x-axis is first, then y-axis. Also note, if
                 gating is on then gated measurements will not be plotted.
+            marker (string): Shape to use as a marker, can be any valid value
+                used by matplotlib
+            ttl_fontsize (int): Title font size
+            ttl_fontstyle (string): Matplotlib font style for the title
+            ttl_fontfamily (string): Matplotlib font family for the title
+            ax_fontsize (int): Axis label font size
+            ax_fontstyle (string): Matplotlib font style for the axis label
+            ax_fontfamily (string): Matplotlib font family for the axis label
 
 
         Returns:
@@ -72,6 +80,8 @@ def init_plotting_opts(**kwargs):
     opts['true_states'] = kwargs.get('true_states', None)
     opts['rng'] = kwargs.get('rng', rnd.default_rng(1))
     opts['meas_inds'] = kwargs.get('meas_inds', None)
+
+    opts['marker'] = kwargs.get('marker', 'o')
 
     opts['ttl_fontsize'] = kwargs.get('ttl_fontsize', 12)
     opts['ttl_fontstyle'] = kwargs.get('ttl_fontstyle', 'normal')

@@ -359,7 +359,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         valid.sort()
         return [meas[ii] for ii in valid]
 
-    def plot_states(self, plt_inds, **kwargs):
+    def plot_states(self, plt_inds, state_lbl='States', **kwargs):
         """ Plots the best estimate for the states.
 
         This assumes that the states have been extracted. It's designed to plot
@@ -376,9 +376,12 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             - rng
             - meas_inds
             - lgnd_loc
+            - marker
 
         Args:
             plt_inds (list): List of indices in the state vector to plot
+            state_lbl (string): Value to appear in legend for the states. Only
+                appears if the legend is shown
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
@@ -457,11 +460,12 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             if not added_state_lbl:
                 f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
                                        color=color, edgecolors=(0, 0, 0),
-                                       label='States')
+                                       marker=opts['marker'], label=state_lbl)
                 added_state_lbl = True
             else:
                 f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                       color=color, edgecolors=(0, 0, 0))
+                                       color=color, edgecolors=(0, 0, 0),
+                                       marker=opts['marker'])
 
         # if true states are available then plot them
         if true_states is not None:
@@ -726,8 +730,9 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 ups1_D[nn, :] = np.sum(terms1_D, axis=0)
 
         gmix = deepcopy(probDensity)
-        w_update = ((ups1_E.T @ self._card_dist) / (
-            ups0_E.T @ self._card_dist)) * w_pred
+        w_update = np.log(ups1_E.T @ self._card_dist) \
+            - np.log(ups0_E.T @ self._card_dist) + np.log(w_pred)
+        w_update = np.exp(w_update)
 
         gmix.weights = [x.item() for x in w_update]
 
@@ -921,11 +926,11 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         x_vals = [ii for ii in range(0, len(self._n_states_per_time))]
 
-        f_hndl.axes[0].plot(x_vals, self._n_states_per_time);
+        f_hndl.axes[0].plot(x_vals, self._n_states_per_time)
         plt.grid(True)
         pltUtil.set_title_label(f_hndl, 0, opts,
-                                ttl="States per Timestep",
-                                x_lbl="Time", y_lbl="Cardinality")
+                                ttl="Gaussians per Timestep",
+                                x_lbl="Time", y_lbl="Number of Gaussians")
 
         return f_hndl
 
