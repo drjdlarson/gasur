@@ -359,7 +359,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         valid.sort()
         return [meas[ii] for ii in valid]
 
-    def plot_states(self, plt_inds, state_lbl='States', **kwargs):
+    def plot_states(self, plt_inds, state_lbl='States', state_color='g',
+                    **kwargs):
         """ Plots the best estimate for the states.
 
         This assumes that the states have been extracted. It's designed to plot
