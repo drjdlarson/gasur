@@ -10,11 +10,12 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import abc
 from copy import deepcopy
+from warnings import warn
 
-from gncpy.math import log_sum_exp
+from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
-from gasur.utilities.plotting import calc_error_ellipse
+import gasur.utilities.plotting as pltUtil
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -26,6 +27,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         prob_survive (float): Modeled probability of object survival
         birth_terms (list): List of terms in the birth model
     """
+
     def __init__(self, **kwargs):
         self.filter = None
         self.prob_detection = 1
@@ -33,6 +35,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.birth_terms = []
         self.clutter_rate = 0
         self.clutter_den = 0
+
+        self.debug_plots = False
         super().__init__(**kwargs)
 
     @property
@@ -64,6 +68,880 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def extract_states(self, **kwargs):
         pass
+
+
+class ProbabilityHypothesisDensity(RandomFiniteSetBase):
+    """ Probability Hypothesis Density Filter
+
+
+    """
+
+    def __init__(self, **kwargs):
+        self.gating_on = False
+        self.inv_chi2_gate = 0
+        self.extract_threshold = 0.5
+        self.prune_threshold = 1*10**(-5)
+        self.merge_threshold = 4
+        self.save_covs = False
+        self.max_gauss = 100
+
+        self._gaussMix = GaussianMixture()
+        self._states = []  # local copy for internal modification
+        self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
+        self._covs = []  # local copy for internal modification
+        super().__init__(**kwargs)
+
+    @property
+    def states(self):
+        """ Read only list of extracted states.
+
+        This is a list with 1 element per timestep, and each element is a list
+        of the best states extracted at that timestep. The order of each
+        element corresponds to the label order.
+        """
+        if len(self._states) > 0:
+            return self._states[-1]
+        else:
+            return []
+
+    @property
+    def covariances(self):
+        """ Read only list of extracted covariances.
+
+        This is a list with 1 element per timestep, and each element is a list
+        of the best covariances extracted at that timestep. The order of each
+        element corresponds to the state order.
+
+        Raises:
+            RuntimeWarning: If the class is not saving the covariances, and
+                returns an empty list
+        """
+        if not self.save_covs:
+            raise RuntimeWarning("Not saving covariances")
+            return []
+        if len(self._covs) > 0:
+            return self._covs[-1]
+        else:
+            return []
+
+    @property
+    def cardinality(self):
+        if len(self._states) ==  0:
+            return 0
+        else:
+            return len(self._states[-1])
+
+    def predict(self, **kwargs):
+        """ Prediction step of the PHD filter.
+
+        This predicts new hypothesis, and propogates them to the next time
+        step. It also updates the cardinality distribution. Because this calls
+        the inner filter's predict function, the keyword arguments must contain
+        any information needed by that function.
+
+        Keyword Args:
+
+        """
+        self._gaussMix = self.predict_prob_density(probDensity=self._gaussMix,
+                                                   **kwargs)
+
+        for gm in self.birth_terms:
+            self._gaussMix.weights.extend(gm.weights)
+            self._gaussMix.means.extend(gm.means)
+            self._gaussMix.covariances.extend(gm.covariances)
+
+    def predict_prob_density(self, **kwargs):
+        """ Loops over all elements in a probability distribution and performs
+        the filter prediction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`):
+                A probability density to run prediction on
+
+        Returns:
+            gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
+                predicted probability density
+        """
+        probDensity = kwargs['probDensity']
+        gm_tup = zip(probDensity.means,
+                     probDensity.covariances)
+        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
+        gm = GaussianMixture()
+        gm.weights = [self.prob_survive*x for x in probDensity.weights.copy()]
+        for ii, (m, P) in enumerate(gm_tup):
+            self.filter.cov = P
+            n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
+                                         **kwargs)
+            gm.covariances.append(self.filter.cov.copy())
+            gm.means.append(n_mean)
+
+        return gm
+
+    def correct(self, **kwargs):
+        """ Correction step of the PHD filter.
+
+        This corrects the hypotheses based on the measurements and gates the
+        measurements according to the class settings. It also updates the
+        cardinality distribution. Because this calls the inner filter's correct
+        function, the keyword arguments must contain any information needed by
+        that function.
+
+        Keyword Args:
+            meas (list): List of Nm x 1 numpy arrays that contain all the
+                measurements needed for this correction
+        """
+        meas = deepcopy(kwargs['meas'])
+        del kwargs['meas']
+
+        if self.gating_on:
+            meas = self._gate_meas(meas, self._gaussMix.means,
+                                   self._gaussMix.covariances, **kwargs)
+
+        self._meas_tab.append(meas)
+
+        gmix = deepcopy(self._gaussMix)
+        gmix.weights = [self.prob_miss_detection*x for x in gmix.weights]
+        gm = self.correct_prob_density(meas=meas, probDensity=self._gaussMix,
+                                       **kwargs)
+
+        gm.weights.extend(gmix.weights)
+        self._gaussMix.weights = gm.weights.copy()
+        gm.means.extend(gmix.means)
+        self._gaussMix.means = gm.means.copy()
+        gm.covariances.extend(gmix.covariances)
+        self._gaussMix.covariances = gm.covariances.copy()
+
+    def correct_prob_density(self, meas, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter correction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
+                probability density to run correction on
+            meas (list): List of measurements, each is a N x 1 numpy array
+
+        Returns:
+            tuple containing
+
+                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
+                  corrected probability density
+                - cost (float): Total cost of for the m best assignment
+        """
+        probDensity = kwargs['probDensity']
+        gm = GaussianMixture()
+        det_weights = [self.prob_detection * x for x in probDensity.weights]
+        for z in meas:
+            w_lst = []
+            for jj in range(0, len(probDensity.means)):
+                self.filter.cov = probDensity.covariances[jj]
+                state = probDensity.means[jj]
+                (mean, qz) = self.filter.correct(meas=z, cur_state=state,
+                                                 **kwargs)
+                cov = self.filter.cov
+                w = qz * det_weights[jj]
+                gm.means.append(mean)
+                gm.covariances.append(cov)
+                w_lst.append(w)
+            gm.weights.extend([x / (self.clutter_rate * self.clutter_den
+                               + sum(w_lst)) for x in w_lst])
+
+        return gm
+
+    def prune(self, **kwargs):
+        """ Removes hypotheses below a threshold.
+
+        This should be called once per time step after the correction and
+        before the state extraction.
+        """
+        idx = np.where(np.asarray(self._gaussMix.weights)
+                       < self.prune_threshold)
+        idx = np.ndarray.flatten(idx[0])
+        for index in sorted(idx, reverse=True):
+            del self._gaussMix.means[index]
+            del self._gaussMix.weights[index]
+            del self._gaussMix.covariances[index]
+
+    def merge(self, **kwargs):
+        loop_inds = set(range(0, len(self._gaussMix.means)))
+
+        w_lst = []
+        m_lst = []
+        p_lst = []
+        while len(loop_inds) > 0:
+            jj = np.argmax(self._gaussMix.weights)
+            comp_inds = []
+            inv_cov = inv(self._gaussMix.covariances[jj])
+            for ii in loop_inds:
+                diff = self._gaussMix.means[ii] - self._gaussMix.means[jj]
+                val = diff.T @ inv_cov @ diff
+                if val <= self.merge_threshold:
+                    comp_inds.append(ii)
+
+            w_new = sum([self._gaussMix.weights[ii] for ii in comp_inds])
+            m_new = sum([self._gaussMix.weights[ii] * self._gaussMix.means[ii]
+                         for ii in comp_inds]) / w_new
+            p_new = sum([self._gaussMix.weights[ii]
+                         * self._gaussMix.covariances[ii]
+                         for ii in comp_inds]) / w_new
+
+            w_lst.append(w_new)
+            m_lst.append(m_new)
+            p_lst.append(p_new)
+
+            loop_inds = loop_inds.symmetric_difference(comp_inds)
+            for ii in comp_inds:
+                self._gaussMix.weights[ii] = -1
+
+        self._gaussMix.weights = w_lst
+        self._gaussMix.means = m_lst
+        self._gaussMix.covariances = p_lst
+
+    def cap(self, **kwargs):
+        """ Removes least likely hypotheses until a maximum number is reached.
+
+        This should be called once per time step after pruning and
+        before the state extraction.
+        """
+        if len(self._gaussMix.weights) > self.max_gauss:
+            idx = np.argsort(self._gaussMix.weights)
+            w = sum(self._gaussMix.weights)
+            for index in sorted(idx[0:-self.max_gauss], reverse=True):
+                del self._gaussMix.means[index]
+                del self._gaussMix.weights[index]
+                del self._gaussMix.covariances[index]
+            self._gaussMix.weights = [x * (w / sum(self._gaussMix.weights))
+                                      for x in self._gaussMix.weights]
+
+    def extract_states(self, **kwargs):
+        """ Extracts the best state estimates.
+
+        This extracts the best states from the distribution. It should be
+        called once per time step after the correction function. This calls
+        both the inner filters predict and correct functions so the keyword
+        arguments must contain any additional variables needed by those
+        functions.
+        """
+        inds = np.where(np.asarray(self._gaussMix.weights)
+                        >= self.extract_threshold)
+        inds = np.ndarray.flatten(inds[0])
+        s_lst = []
+        c_lst = []
+        for jj in inds:
+            num_reps = round(self._gaussMix.weights[jj])
+            s_lst.extend([self._gaussMix.means[jj]] * num_reps)
+            if self.save_covs:
+                c_lst.extend([self._gaussMix.covariances[jj]] * num_reps)
+        self._states.append(s_lst)
+        if self.save_covs:
+            self._covs.append(c_lst)
+
+    def _gate_meas(self, meas, means, covs, **kwargs):
+        if len(meas) == 0:
+            return []
+
+        valid = []
+        for (m, p) in zip(means, covs):
+            meas_mat = self.filter.get_meas_mat(m, **kwargs)
+            est = self.filter.get_est_meas(m, **kwargs)
+            meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
+            meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
+            v_s = cholesky(meas_pred_cov.T)
+            inv_sqrt_m_cov = inv(v_s)
+
+            for (ii, z) in enumerate(meas):
+                if ii in valid:
+                    continue
+                inov = z - est
+                dist = np.sum((inv_sqrt_m_cov.T @ inov)**2)
+                if dist < self.inv_chi2_gate:
+                    valid.append(ii)
+
+        valid.sort()
+        return [meas[ii] for ii in valid]
+
+    def plot_states(self, plt_inds, state_lbl='States', state_color=None,
+                    **kwargs):
+        """ Plots the best estimate for the states.
+
+        This assumes that the states have been extracted. It's designed to plot
+        two of the state variables (typically x/y position). The error ellipses
+        are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
+
+        Keyword arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+            - true_states
+            - sig_bnd
+            - rng
+            - meas_inds
+            - lgnd_loc
+            - marker
+
+        Args:
+            plt_inds (list): List of indices in the state vector to plot
+            state_lbl (string): Value to appear in legend for the states. Only
+                appears if the legend is shown
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        true_states = opts['true_states']
+        sig_bnd = opts['sig_bnd']
+        rng = opts['rng']
+        meas_inds = opts['meas_inds']
+        lgnd_loc = opts['lgnd_loc']
+
+        if rng is None:
+            rng = rnd.default_rng(1)
+
+        plt_meas = meas_inds is not None
+        show_sig = sig_bnd is not None and self.save_covs
+
+        s_lst = deepcopy(self._states)
+        x_dim = None
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        # get state dimension
+        for states in s_lst:
+            if len(states) > 0:
+                x_dim = states[0].size
+                break
+
+        # get array of all state values for each label
+        added_sig_lbl = False
+        added_true_lbl = False
+        added_state_lbl = False
+        added_meas_lbl = False
+        r = rng.random()
+        b = rng.random()
+        g = rng.random()
+        if state_color is None:
+            color = (r, g, b)
+        else:
+            color = state_color
+        for tt, states in enumerate(s_lst):
+            if len(states) == 0:
+                continue
+
+            x = np.concatenate(states, axis=1)
+            if show_sig:
+                sigs = [None] * len(states)
+                for ii, cov in enumerate(self._covs[tt]):
+                    sig = np.zeros((2, 2))
+                    sig[0, 0] = cov[plt_inds[0], plt_inds[0]]
+                    sig[0, 1] = cov[plt_inds[0], plt_inds[1]]
+                    sig[1, 0] = cov[plt_inds[1], plt_inds[0]]
+                    sig[1, 1] = cov[plt_inds[1], plt_inds[1]]
+                    sigs[ii] = sig
+
+                # plot
+                for ii, sig in enumerate(sigs):
+                    if sig is None:
+                        continue
+                    w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
+                    if not added_sig_lbl:
+                        s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
+                        e = Ellipse(xy=x[plt_inds, ii], width=w,
+                                    height=h, angle=a, zorder=-10000,
+                                    label=s)
+                        added_sig_lbl = True
+                    else:
+                        e = Ellipse(xy=x[plt_inds, ii], width=w,
+                                    height=h, angle=a, zorder=-10000)
+                    e.set_clip_box(f_hndl.axes[0].bbox)
+                    e.set_alpha(0.15)
+                    e.set_facecolor(color)
+                    f_hndl.axes[0].add_patch(e)
+
+            if not added_state_lbl:
+                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                       color=color, edgecolors=(0, 0, 0),
+                                       marker=opts['marker'], label=state_lbl)
+                added_state_lbl = True
+            else:
+                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                                       color=color, edgecolors=(0, 0, 0),
+                                       marker=opts['marker'])
+
+        # if true states are available then plot them
+        if true_states is not None:
+            if x_dim is None:
+                for states in true_states:
+                    if len(states) > 0:
+                        x_dim = states[0].size
+                        break
+
+            max_true = max([len(x) for x in true_states])
+            x = np.nan * np.ones((x_dim, len(true_states), max_true))
+            for tt, states in enumerate(true_states):
+                for ii, state in enumerate(states):
+                    x[:, [tt], ii] = state.copy()
+
+            for ii in range(0, max_true):
+                if not added_true_lbl:
+                    f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                        x[plt_inds[1], :, ii],
+                                        color='k', marker='.',
+                                        label='True Trajectories')
+                    added_true_lbl = True
+                else:
+                    f_hndl.axes[0].plot(x[plt_inds[0], :, ii],
+                                        x[plt_inds[1], :, ii],
+                                        color='k', marker='.')
+
+        if plt_meas:
+            meas_x = []
+            meas_y = []
+            for meas_tt in self._meas_tab:
+                mx_ii = [m[meas_inds[0]].item() for m in meas_tt]
+                my_ii = [m[meas_inds[1]].item() for m in meas_tt]
+                meas_x.extend(mx_ii)
+                meas_y.extend(my_ii)
+            color = (128/255, 128/255, 128/255)
+            meas_x = np.asarray(meas_x)
+            meas_y = np.asarray(meas_y)
+            if not added_meas_lbl:
+                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                       color=color, marker='^',
+                                       edgecolors =(0, 0, 0),
+                                       label='Measurements')
+            else:
+                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                       color=color, marker='^',
+                                       edgecolors =(0, 0, 0))
+
+        f_hndl.axes[0].grid(True)
+        pltUtil.set_title_label(f_hndl, 0, opts, ttl="State Estimates",
+                                x_lbl="x-position", y_lbl="y-position")
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
+        plt.tight_layout()
+
+        return f_hndl
+
+
+class CardinalizedPHD(ProbabilityHypothesisDensity):
+    """ Cardinalized Probability Hypothesis Density Filter
+
+
+    """
+
+    def __init__(self, **kwargs):
+        self.agents_per_state = []
+        self._max_expected_card = 10
+
+        self._card_dist = np.zeros(self.max_expected_card + 1)  # local copy for internal modification
+        self._card_dist[0] = 1
+        self._card_time_hist = []  # local copy for internal modification
+        self._n_states_per_time = []
+
+        super().__init__(**kwargs)
+
+    @property
+    def max_expected_card(self):
+        return self._max_expected_card
+
+    @max_expected_card.setter
+    def max_expected_card(self, x):
+        self._card_dist = np.zeros(x + 1)
+        self._card_dist[0] = 1
+        self._max_expected_card = x
+
+    @property
+    def cardinality(self):
+        return np.argmax(self._card_dist)
+
+    def predict(self, **kwargs):
+        """ Prediction step of the CPHD filter.
+
+        This predicts new hypothesis, and propogates them to the next time
+        step. It also updates the cardinality distribution. Because this calls
+        the inner filter's predict function, the keyword arguments must contain
+        any information needed by that function.
+
+        Keyword Args:
+
+        """
+        super().predict(**kwargs)
+
+        survive_cdn_predict = np.zeros(self.max_expected_card + 1)
+        for j in range(0, self.max_expected_card):
+            terms = np.zeros((self.max_expected_card + 1, 1))
+            for i in range(j, self.max_expected_card + 1):
+                temp = []
+                temp.append(np.sum(np.log(range(1, i + 1))))
+                temp.append(-np.sum(np.log(range(1, j + 1))))
+                temp.append(np.sum(np.log(range(1, i - j + 1))))
+                temp.append(j * np.log(self.prob_survive))
+                temp.append((i - j) * np.log(self.prob_death))
+                terms[i, 0] = np.exp(np.sum(temp)) * self._card_dist[i]
+            survive_cdn_predict[j] = np.sum(terms)
+
+        cdn_predict = np.zeros(self.max_expected_card + 1)
+        for n in range(0, self.max_expected_card + 1):
+            terms = np.zeros((self.max_expected_card + 1, 1))
+            for j in range(0, n + 1):
+                temp = []
+                birth = np.zeros(len(self.birth_terms))
+                for b in range(0, len(self.birth_terms)):
+                    birth[b] = self.birth_terms[b].weights[0]
+                temp.append(np.sum(birth))
+                temp.append((n - j) * np.log(np.sum(birth)))
+                temp.append(-np.sum(np.log(range(1, n - j + 1))))
+                terms[j, 0] = np.exp(np.sum(temp)) * survive_cdn_predict[j]
+            cdn_predict[n] = np.sum(terms)
+        self._card_dist = (cdn_predict/np.sum(cdn_predict)).copy()
+
+    def correct(self, **kwargs):
+        """ Correction step of the CPHD filter.
+
+        This corrects the hypotheses based on the measurements and gates the
+        measurements according to the class settings. It also updates the
+        cardinality distribution. Because this calls the inner filter's correct
+        function, the keyword arguments must contain any information needed by
+        that function.
+
+        Keyword Args:
+            meas (list): List of Nm x 1 numpy arrays that contain all the
+                measurements needed for this correction
+        """
+        meas = deepcopy(kwargs['meas'])
+        del kwargs['meas']
+
+        if self.gating_on:
+            meas = self._gate_meas(meas, self._gaussMix.means,
+                                   self._gaussMix.covariances, **kwargs)
+
+        self._meas_tab.append(meas)
+
+        gmix = deepcopy(self._gaussMix)  # predicted gm
+
+        self._gaussMix = self.correct_prob_density(meas=meas, probDensity=gmix,
+                                                   **kwargs)
+
+    def correct_prob_density(self, meas, **kwargs):
+        """ Loops over all elements in a probability distribution and preforms
+        the filter correction.
+
+        Keyword Args:
+            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
+                probability density to run correction on
+            meas (list): List of measurements, each is a N x 1 numpy array
+
+        Returns:
+                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
+                  corrected probability density
+        """
+        probDensity = kwargs['probDensity']
+        w_pred = np.zeros((len(probDensity.weights), 1))
+        for i in range(0, len(probDensity.weights)):
+            w_pred[i] = probDensity.weights[i]
+
+        xdim = len(probDensity.means[0])
+
+        plen = len(probDensity.means)
+        zlen = len(meas)
+
+        qz_temp = np.zeros((plen, zlen))
+        mean_temp = np.zeros((zlen, xdim, plen))
+        cov_temp = np.zeros((plen, xdim, xdim))
+
+        for z_ind in range(0, zlen):
+            for p_ind in range(0, plen):
+                self.filter.cov = probDensity.covariances[p_ind]
+                state = probDensity.means[p_ind]
+                (mean, qz) = self.filter.correct(meas=meas[z_ind],
+                                                 cur_state=state,
+                                                 **kwargs)
+                cov = self.filter.cov
+                qz_temp[p_ind, z_ind] = qz
+                mean_temp[z_ind, :, p_ind] = np.ndarray.flatten(mean)
+                cov_temp[[p_ind], :, :] = cov
+
+        xivals = np.zeros(zlen)
+        pdc = self.prob_detection/self.clutter_den
+        for e in range(0, zlen):
+            xivals[e] = pdc * np.dot(w_pred.T, qz_temp[:, [e]])
+            # xilog = []
+            # for c in range(0, len(w_pred)):
+            #     xilog.append(np.log(w_pred[[c]]).item())
+            #     xilog.append(np.log(qz_temp[c, e]))
+            # xivals[e] = np.exp(np.log(pdc) + np.sum(xilog))
+
+        esfvals_E = get_elem_sym_fnc(xivals)
+        esfvals_D = np.zeros((zlen, zlen))
+
+        for j in range(0, zlen):
+            xi_temp = xivals.copy()
+            xi_temp = np.delete(xi_temp, j)
+            esfvals_D[:, [j]] = get_elem_sym_fnc(xi_temp)
+
+        ups0_E = np.zeros((self.max_expected_card + 1, 1))
+        ups1_E = np.zeros((self.max_expected_card + 1, 1))
+        ups1_D = np.zeros((self.max_expected_card + 1, zlen))
+
+        tot_w_pred = sum(w_pred)
+        for nn in range(0, self.max_expected_card + 1):
+            terms0_E = np.zeros((min(zlen, nn) + 1))
+            for jj in range(0, min(zlen, nn) + 1):
+                t1 = -self.clutter_rate + (zlen - jj) \
+                    * np.log(self.clutter_rate)
+                t2 = sum([np.log(x) for x in range(1, nn + 1)])
+                t3 = -1 * sum([np.log(x) for x in range(1, nn - jj + 1)])
+                t4 = (nn - jj) * np.log(self.prob_death)
+                t5 = -jj * np.log(tot_w_pred)
+                terms0_E[jj] = np.exp(t1 + t2 + t3 + t4 + t5) * esfvals_E[jj]
+            ups0_E[nn] = np.sum(terms0_E)
+
+            terms1_E = np.zeros((min(zlen, nn) + 1))
+            for jj in range(0, min(zlen, nn) + 1):
+                if nn >= jj + 1:
+                    t1 = -self.clutter_rate + (zlen - jj) \
+                        * np.log(self.clutter_rate)
+                    t2 = sum([np.log(x) for x in range(1, nn + 1)])
+                    t3 = -1 * sum([np.log(x)
+                                   for x in range(1, nn - (jj + 1) + 1)])
+                    t4 = (nn - (jj + 1)) * np.log(self.prob_death)
+                    t5 = -(jj + 1) * np.log(tot_w_pred)
+                    terms1_E[jj] = np.exp(t1 + t2 + t3 + t4 + t5) \
+                        * esfvals_E[jj]
+            ups1_E[nn] = np.sum(terms1_E)
+
+            if zlen != 0:
+                terms1_D = np.zeros((min(zlen - 1, nn) + 1, zlen))
+                for ell in range(1, zlen + 1):
+                    for jj in range(0, min((zlen - 1), nn) + 1):
+                        if nn >= jj + 1:
+                            t1 = -self.clutter_rate + ((zlen - 1) - jj) \
+                                * np.log(self.clutter_rate)
+                            t2 = sum([np.log(x) for x in range(1, nn + 1)])
+                            t3 = -1 * sum([np.log(x)
+                                           for x in range(1,
+                                                          nn - (jj + 1) + 1)])
+                            t4 = (nn - (jj + 1)) * np.log(self.prob_death)
+                            t5 = -(jj + 1) * np.log(tot_w_pred)
+                            terms1_D[jj, ell - 1] = np.exp(t1 + t2 + t3
+                                                           + t4 + t5) \
+                                * esfvals_D[jj, ell - 1]
+                ups1_D[nn, :] = np.sum(terms1_D, axis=0)
+
+        gmix = deepcopy(probDensity)
+        w_update = ((ups1_E.T @ self._card_dist)
+                    / (ups0_E.T @ self._card_dist)) * self.prob_miss_detection * w_pred
+        # w_update = np.exp(w_update)
+
+        gmix.weights = [x.item() for x in w_update]
+
+        for ee in range(0, zlen):
+            wt_1 = ((ups1_D[:, [ee]].T @ self._card_dist) / (ups0_E.T @ self._card_dist)).reshape((1, 1))
+            wt_2 = self.prob_detection * qz_temp[:, [ee]] / self.clutter_den * w_pred
+            w_temp = wt_1 * wt_2
+            for ww in range(0, w_temp.shape[0]):
+                gmix.weights.append(w_temp[ww].item())
+                gmix.means.append(mean_temp[ee, :, ww].reshape((xdim, 1)))
+                gmix.covariances.append(cov_temp[ww, :, :])
+
+        cdn_update = self._card_dist.copy()
+        for ii in range(0, len(cdn_update)):
+            cdn_update[ii] = ups0_E[ii] * self._card_dist[ii]
+
+        self._card_dist = cdn_update / np.sum(cdn_update)
+        self._card_time_hist.append((np.argmax(self._card_dist).item(),
+                                     np.std(self._card_dist)))
+
+        return gmix
+
+    def extract_states(self, **kwargs):
+        """ Extracts the best state estimates.
+
+        This extracts the best states from the distribution. It should be
+        called once per time step after the correction function. This calls
+        both the inner filters predict and correct functions so the keyword
+        arguments must contain any additional variables needed by those
+        functions.
+        """
+        s_weights = np.argsort(self._gaussMix.weights)[::-1]
+        s_lst = []
+        c_lst = []
+        self.agents_per_state = []
+        ii = 0
+        tot_agents = 0
+        while ii < s_weights.size and tot_agents < self.cardinality:
+            idx = s_weights[ii]
+
+            n_agents = round(self._gaussMix.weights[idx])
+            if n_agents <= 0:
+                msg = "Gaussian weights are 0 before reaching cardinality"
+                warn(msg, RuntimeWarning)
+                break
+
+            tot_agents += n_agents
+            self.agents_per_state.append(n_agents)
+
+            s_lst.append(self._gaussMix.means[idx])
+            if self.save_covs:
+                c_lst.append(self._gaussMix.covariances[idx])
+
+            ii += 1
+
+        self._states.append(s_lst)
+        if self.save_covs:
+            self._covs.append(c_lst)
+        if self.debug_plots:
+            self._n_states_per_time.append(ii)
+
+    def plot_card_dist(self, **kwargs):
+        """ Plots the current cardinality distribution.
+
+        This assumes that the cardinality distribution has been calculated by
+        the class.
+
+        Keyword arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+
+        if len(self._card_dist) == 0:
+            raise RuntimeWarning("Empty Cardinality")
+            return f_hndl
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        x_vals = np.arange(0, len(self._card_dist))
+        f_hndl.axes[0].bar(x_vals, self._card_dist)
+
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Cardinality Distribution",
+                                x_lbl="Cardinality", y_lbl="Probability")
+        plt.tight_layout()
+
+        return f_hndl
+
+    def plot_card_time_hist(self, **kwargs):
+        """ Plots the current cardinality time history.
+
+        This assumes that the cardinality distribution has been calculated by
+        the class.
+
+        Keyword arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+            - sig_bnd
+            - time_vec
+            - lgnd_loc
+
+        Keyword Args:
+            true_card (array like): List of the true cardinality at each time
+
+        Returns:
+            (Matplotlib figure): Instance of the matplotlib figure used
+        """
+
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        sig_bnd = opts['sig_bnd']
+        time_vec = opts['time_vec']
+        lgnd_loc = opts['lgnd_loc']
+
+        true_card = kwargs.get('true_card', None)
+
+        if len(self._card_time_hist) == 0:
+            raise RuntimeWarning("Empty Cardinality")
+            return f_hndl
+
+        if sig_bnd is not None:
+            stds = [sig_bnd * x[1] for x in self._card_time_hist]
+        card = [x[0] for x in self._card_time_hist]
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        if time_vec is None:
+            x_vals = [ii for ii in range(0, len(card))]
+        else:
+            x_vals = time_vec
+
+        if true_card is not None:
+            if len(true_card) != len(x_vals):
+                c_len = len(true_card)
+                t_len = len(x_vals)
+                msg = "True Cardinality vector length ({})".format(c_len) \
+                    + " does not match time vector length ({})".format(t_len)
+                warn(msg)
+            else:
+                f_hndl.axes[0].plot(x_vals, true_card, color='g',
+                                    label='True Cardinality',
+                                    linestyle='-')
+
+        f_hndl.axes[0].plot(x_vals, card, label='Cardinality', color='k',
+                            linestyle='--')
+
+        if sig_bnd is not None:
+            lbl = r'${}\sigma$ Bound'.format(sig_bnd)
+            f_hndl.axes[0].plot(x_vals, [x + s for (x, s) in zip(card, stds)],
+                                linestyle='--', color='r', label=lbl)
+            f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
+                                linestyle='--', color='r')
+
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
+
+        plt.grid(True)
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Cardinality History",
+                                x_lbl="Time", y_lbl="Cardinality")
+
+        plt.tight_layout()
+
+        return f_hndl
+
+    def plot_number_states_per_time(self, **kwargs):
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        lgnd_loc = opts['lgnd_loc']
+
+        if not self.debug_plots:
+            msg = 'Debug plots turned off'
+            warn(msg)
+            return f_hndl
+
+        if f_hndl is None:
+            f_hndl = plt.figure()
+            f_hndl.add_subplot(1, 1, 1)
+
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
+
+        x_vals = [ii for ii in range(0, len(self._n_states_per_time))]
+
+        f_hndl.axes[0].plot(x_vals, self._n_states_per_time)
+        plt.grid(True)
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Gaussians per Timestep",
+                                x_lbl="Time", y_lbl="Number of Gaussians")
+
+        return f_hndl
 
 
 class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
@@ -738,36 +1616,31 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         two of the state variables (typically x/y position). The error ellipses
         are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
+            - true_states
+            - sig_bnd
+            - rng
+            - meas_inds
+            - lgnd_loc
+
         Args:
             plt_inds (list): List of indices in the state vector to plot
-
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
-            true_states (list): list where each element is a list of numpy
-                N x 1 arrays of each true state. If not given true states
-                are not plotted.
-            sig_bnd (int): If set and the covariances are saved, the sigma
-                bounds are scaled by this number and plotted for each track
-            rng (Generator): A numpy random generator, leave as None for
-                default.
-            meas_inds (list): List of indices in the measurement vector to plot
-                if this is specified all available measurements will be
-                plotted. Note, x-axis is first, then y-axis. Also note, if
-                gating is on then gated measurements will not be plotted.
-            lgnd_loc (string): Location of the legend. Set to none to skip
-                creating a legend.
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
-        true_states = kwargs.get('true_states', None)
-        sig_bnd = kwargs.get('sig_bnd', None)
-        rng = kwargs.get('rng', None)
-        meas_inds = kwargs.get('meas_inds', None)
-        lgnd_loc = kwargs.get('lgnd_loc', None)
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        true_states = opts['true_states']
+        sig_bnd = opts['sig_bnd']
+        rng = opts['rng']
+        meas_inds = opts['meas_inds']
+        lgnd_loc = opts['lgnd_loc']
 
         if rng is None:
             rng = rnd.default_rng(1)
@@ -835,7 +1708,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 for tt, sig in enumerate(sigs):
                     if sig is None:
                         continue
-                    w, h, a = calc_error_ellipse(sig, sig_bnd)
+                    w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
                     if not added_sig_lbl:
                         s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
                         e = Ellipse(xy=x[plt_inds, tt], width=w,
@@ -911,9 +1784,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                                        color=color, marker='^')
 
         f_hndl.axes[0].grid(True)
-        f_hndl.axes[0].set_title("Labeled State Trajectories")
-        f_hndl.axes[0].set_ylabel("y-position")
-        f_hndl.axes[0].set_xlabel("x-position")
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Labeled State Trajectories",
+                                x_lbl="x-position", y_lbl="y-position")
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
         plt.tight_layout()
@@ -926,15 +1799,18 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keyword Args:
-            f_hndl (Matplotlib figure): Current to figure to plot on. Always
-                plots on axes[0], pass None to create a new figure
+        Keywrod arguments are processed with
+        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        implements
+
+            - f_hndl
 
         Returns:
             (Matplotlib figure): Instance of the matplotlib figure used
         """
 
-        f_hndl = kwargs.get('f_hndl', None)
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
 
         if len(self._card_dist) == 0:
             raise RuntimeWarning("Empty Cardinality")
@@ -947,9 +1823,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         x_vals = np.arange(0, len(self._card_dist))
         f_hndl.axes[0].bar(x_vals, self._card_dist)
 
-        f_hndl.axes[0].set_title("Cardinality Distribution")
-        f_hndl.axes[0].set_ylabel("Probability")
-        f_hndl.axes[0].set_xlabel("Cardinality")
+        pltUtil.set_title_label(f_hndl, 0, opts,
+                                ttl="Cardinality Distribution",
+                                x_lbl="Cardinality", y_lbl="Probability")
         plt.tight_layout()
 
         return f_hndl

@@ -130,3 +130,18 @@ def test_murty_m_best3():
 
     test.assert_array_equal(assigns, exp_assigns)
     test.assert_array_almost_equal(costs, exp_costs)
+
+
+def test_a_star1():
+    maze = np.random.random((25, 25))  # generate random maze
+    for ii in range(0, np.size(maze, axis=0)):
+        for jj in range(0, np.size(maze, axis=1)):
+            if maze[ii][jj] < 0.05:
+                maze[ii][jj] = 1
+            else:
+                maze[ii][jj] = 0
+
+    start = (0, 0)
+    end = (24, 24)
+    # graphs.a_star_search(maze, start, end)
+    test.assert_no_warnings(graphs.a_star_search, maze, start, end)
