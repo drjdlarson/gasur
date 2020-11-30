@@ -359,7 +359,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         valid.sort()
         return [meas[ii] for ii in valid]
 
-    def plot_states(self, plt_inds, state_lbl='States', state_color='g',
+    def plot_states(self, plt_inds, state_lbl='States', state_color=None,
                     **kwargs):
         """ Plots the best estimate for the states.
 
@@ -423,7 +423,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         r = rng.random()
         b = rng.random()
         g = rng.random()
-        if state_color is not None:
+        if state_color is None:
             color = (r, g, b)
         else:
             color = state_color
