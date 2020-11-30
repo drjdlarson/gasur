@@ -778,6 +778,11 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             idx = s_weights[ii]
 
             n_agents = round(self._gaussMix.weights[idx])
+            if n_agents <= 0:
+                msg = "Gaussian weights are 0 before reaching cardinality"
+                warn(msg, RuntimeWarning)
+                break
+
             tot_agents += n_agents
             self.agents_per_state.append(n_agents)
 
