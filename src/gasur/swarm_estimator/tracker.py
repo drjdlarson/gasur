@@ -423,7 +423,10 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         r = rng.random()
         b = rng.random()
         g = rng.random()
-        color = (r, g, b)
+        if state_color is not None:
+            color = (r, g, b)
+        else:
+            color = state_color
         for tt, states in enumerate(s_lst):
             if len(states) == 0:
                 continue
