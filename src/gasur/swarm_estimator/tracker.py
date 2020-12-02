@@ -8,6 +8,7 @@ from numpy.linalg import cholesky, inv
 import numpy.random as rnd
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
+import matplotlib.animation as animation
 import abc
 from copy import deepcopy
 from warnings import warn
@@ -26,6 +27,11 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         prob_detection (float): Modeled probability an object is detected
         prob_survive (float): Modeled probability of object survival
         birth_terms (list): List of terms in the birth model
+        clutter_rate (float): Rate of clutter
+        clutter_density (float): Density of clutter distribution
+        inv_chi2_gate (float): Chi squared threshold for gating the
+            measurements
+        debug_plots (bool): Saves data needed for extra debugging plots
     """
 
     def __init__(self, **kwargs):
@@ -35,6 +41,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.birth_terms = []
         self.clutter_rate = 0
         self.clutter_den = 0
+
+        self.inv_chi2_gate = 0
 
         self.debug_plots = False
         super().__init__(**kwargs)
@@ -68,6 +76,46 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def extract_states(self, **kwargs):
         pass
+
+    def _gate_meas(self, meas, means, covs, **kwargs):
+        """
+        This gates measurements assuming a kalman filter (Gaussian noise).
+        See :cite:`Cox1993_AReviewofStatisticalDataAssociationTechniquesforMotionCorrespondence`
+        for details on the chi squared test used.
+
+        Args:
+            meas (list): each element is a 2d numpy array
+            means (list): each element is a 2d numpy array
+            covs (list): each element is a 2d numpy array
+            **kwargs (kwargs): Passed to the filters measurement matrix and
+                estimated measurement functions.
+
+        Returns:
+            list: Measurements passing gating criteria.
+
+        """
+        if len(meas) == 0:
+            return []
+
+        valid = []
+        for (m, p) in zip(means, covs):
+            meas_mat = self.filter.get_meas_mat(m, **kwargs)
+            est = self.filter.get_est_meas(m, **kwargs)
+            meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
+            meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
+            v_s = cholesky(meas_pred_cov.T)
+            inv_sqrt_m_cov = inv(v_s)
+
+            for (ii, z) in enumerate(meas):
+                if ii in valid:
+                    continue
+                inov = z - est
+                dist = np.sum((inv_sqrt_m_cov.T @ inov)**2)
+                if dist < self.inv_chi2_gate:
+                    valid.append(ii)
+
+        valid.sort()
+        return [meas[ii] for ii in valid]
 
 
 class ProbabilityHypothesisDensity(RandomFiniteSetBase):
@@ -335,29 +383,53 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         if self.save_covs:
             self._covs.append(c_lst)
 
-    def _gate_meas(self, meas, means, covs, **kwargs):
-        if len(meas) == 0:
-            return []
+    def __ani_state_plotting(self, f_hndl, tt, states, show_sig, plt_inds, sig_bnd,
+                             color, marker, state_lbl, added_sig_lbl,
+                             added_state_lbl, scat=None):
+        if scat is None:
+            if not added_state_lbl:
+                scat = f_hndl.axes[0].scatter([], [], color=color,
+                                              edgecolors=(0, 0, 0),
+                                              marker=marker)
+            else:
+                scat = f_hndl.axes[0].scatter([], [], color=color,
+                                              edgecolors=(0, 0, 0),
+                                              marker=marker, label=state_lbl)
+        if len(states) == 0:
+            return scat
 
-        valid = []
-        for (m, p) in zip(means, covs):
-            meas_mat = self.filter.get_meas_mat(m, **kwargs)
-            est = self.filter.get_est_meas(m, **kwargs)
-            meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
-            meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
-            v_s = cholesky(meas_pred_cov.T)
-            inv_sqrt_m_cov = inv(v_s)
+        x = np.concatenate(states, axis=1)
+        if show_sig:
+            sigs = [None] * len(states)
+            for ii, cov in enumerate(self._covs[tt]):
+                sig = np.zeros((2, 2))
+                sig[0, 0] = cov[plt_inds[0], plt_inds[0]]
+                sig[0, 1] = cov[plt_inds[0], plt_inds[1]]
+                sig[1, 0] = cov[plt_inds[1], plt_inds[0]]
+                sig[1, 1] = cov[plt_inds[1], plt_inds[1]]
+                sigs[ii] = sig
 
-            for (ii, z) in enumerate(meas):
-                if ii in valid:
+            # plot
+            for ii, sig in enumerate(sigs):
+                if sig is None:
                     continue
-                inov = z - est
-                dist = np.sum((inv_sqrt_m_cov.T @ inov)**2)
-                if dist < self.inv_chi2_gate:
-                    valid.append(ii)
+                w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
+                if not added_sig_lbl:
+                    s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
+                    e = Ellipse(xy=x[plt_inds, ii], width=w,
+                                height=h, angle=a, zorder=-10000,
+                                animated=True, label=s)
+                else:
+                    e = Ellipse(xy=x[plt_inds, ii], width=w,
+                                height=h, angle=a, zorder=-10000,
+                                animated=True)
+                e.set_clip_box(f_hndl.axes[0].bbox)
+                e.set_alpha(0.15)
+                e.set_facecolor(color)
+                f_hndl.axes[0].add_patch(e)
 
-        valid.sort()
-        return [meas[ii] for ii in valid]
+        scat.set_offsets(x[plt_inds[0:2], :].T)
+        return scat
 
     def plot_states(self, plt_inds, state_lbl='States', state_color=None,
                     **kwargs):
@@ -395,6 +467,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         rng = opts['rng']
         meas_inds = opts['meas_inds']
         lgnd_loc = opts['lgnd_loc']
+        marker = opts['marker']
 
         if rng is None:
             rng = rnd.default_rng(1)
@@ -464,12 +537,12 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             if not added_state_lbl:
                 f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
                                        color=color, edgecolors=(0, 0, 0),
-                                       marker=opts['marker'], label=state_lbl)
+                                       marker=marker, label=state_lbl)
                 added_state_lbl = True
             else:
                 f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
                                        color=color, edgecolors=(0, 0, 0),
-                                       marker=opts['marker'])
+                                       marker=marker)
 
         # if true states are available then plot them
         if true_states is not None:
@@ -511,12 +584,12 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             if not added_meas_lbl:
                 f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
                                        color=color, marker='^',
-                                       edgecolors =(0, 0, 0),
+                                       edgecolors=(0, 0, 0),
                                        label='Measurements')
             else:
                 f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
                                        color=color, marker='^',
-                                       edgecolors =(0, 0, 0))
+                                       edgecolors=(0, 0, 0))
 
         f_hndl.axes[0].grid(True)
         pltUtil.set_title_label(f_hndl, 0, opts, ttl="State Estimates",
@@ -526,6 +599,112 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         plt.tight_layout()
 
         return f_hndl
+
+    def animate_state_plot(self, plt_inds, state_lbl='States', state_color=None,
+                           interval=250, repeat=True, repeat_delay=1000,
+                           save_path=None, **kwargs):
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        f_hndl = opts['f_hndl']
+        sig_bnd = opts['sig_bnd']
+        rng = opts['rng']
+        meas_inds = opts['meas_inds']
+        lgnd_loc = opts['lgnd_loc']
+        marker = opts['marker']
+
+        plt_meas = meas_inds is not None
+        show_sig = sig_bnd is not None and self.save_covs
+
+        f_hndl.axes[0].grid(True)
+        pltUtil.set_title_label(f_hndl, 0, opts, ttl="State Estimates",
+                                x_lbl="x-position", y_lbl="y-position")
+
+        fr_number = f_hndl.axes[0].annotate("0", (0, 1),
+                                            xycoords="axes fraction",
+                                            xytext=(10, -10),
+                                            textcoords="offset points",
+                                            ha="left", va="top",
+                                            animated=False)
+
+        added_sig_lbl = False
+        added_state_lbl = False
+        added_meas_lbl = False
+        r = rng.random()
+        b = rng.random()
+        g = rng.random()
+        if state_color is None:
+            s_color = (r, g, b)
+        else:
+            s_color = state_color
+
+        state_scat = f_hndl.axes[0].scatter([], [], color=s_color,
+                                            edgecolors=(0, 0, 0),
+                                            marker=marker, label=state_lbl)
+        meas_scat = None
+        if plt_meas:
+            m_color = (128/255, 128/255, 128/255)
+
+            if meas_scat is None:
+                if not added_meas_lbl:
+                    lbl = 'Measurements'
+                    meas_scat = f_hndl.axes[0].scatter([], [], zorder=-1,
+                                                       alpha=0.35,
+                                                       color=m_color,
+                                                       marker='^',
+                                                       edgecolors='k',
+                                                       label=lbl)
+                    added_meas_lbl = True
+                else:
+                    meas_scat = f_hndl.axes[0].scatter([], [], zorder=-1,
+                                                       alpha=0.35,
+                                                       color=m_color,
+                                                       marker='^',
+                                                       edgecolors='k')
+
+        def update(tt, *fargs):
+            nonlocal added_sig_lbl
+            nonlocal added_state_lbl
+            nonlocal added_meas_lbl
+            nonlocal state_scat
+            nonlocal meas_scat
+            nonlocal fr_number
+
+            fr_number.set_text("Timestep: {j}".format(j=tt))
+
+            states = self._states[tt]
+            state_scat = self.__ani_state_plotting(f_hndl, tt, states,
+                                                   show_sig, plt_inds,
+                                                   sig_bnd, s_color, marker,
+                                                   state_lbl, added_sig_lbl,
+                                                   added_state_lbl,
+                                                   scat=state_scat)
+            added_sig_lbl = True
+            added_state_lbl = True
+
+            if plt_meas:
+                meas_tt = self._meas_tab[tt]
+
+                meas_x = [m[meas_inds[0]].item() for m in meas_tt]
+                meas_y = [m[meas_inds[1]].item() for m in meas_tt]
+
+                meas_x = np.asarray(meas_x)
+                meas_y = np.asarray(meas_y)
+                meas_scat.set_offsets(np.array([meas_x, meas_y]).T)
+
+        # plt.figure(f_hndl.number)
+        anim = animation.FuncAnimation(f_hndl, update,
+                                       frames=len(self._states),
+                                       interval=interval,
+                                       repeat_delay=repeat_delay,
+                                       repeat=repeat)
+
+        if lgnd_loc is not None:
+            plt.legend(loc=lgnd_loc)
+
+        if save_path is not None:
+            writer = animation.PillowWriter(fps=30)
+            anim.save(save_path, writer=writer)
+
+        return anim
 
 
 class CardinalizedPHD(ProbabilityHypothesisDensity):
@@ -957,8 +1136,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         req_surv (int): Number of requested surviving hypotheses
         req_upd (int): Number of requested updated hypotheses
         gating_on (bool): Determines if measurements are gated
-        inv_chi2_gate (float): Chi squared threshold for gating the
-            measurements
         birth_terms (list): List of tuples where the first element is
             a :py:class:`gasur.utilities.distributions.GaussianMixture` and
             the second is the birth probability for that term
@@ -989,7 +1166,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self.req_surv = 0
         self.req_upd = 0
         self.gating_on = False
-        self.inv_chi2_gate = 0
         self.prune_threshold = 1*10**(-15)
         self.max_hyps = 3000
         self.save_covs = False
@@ -1585,30 +1761,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._track_tab = new_tab
         self._hypotheses = new_hyps
 
-    def _gate_meas(self, meas, means, covs, **kwargs):
-        if len(meas) == 0:
-            return []
-
-        valid = []
-        for (m, p) in zip(means, covs):
-            meas_mat = self.filter.get_meas_mat(m, **kwargs)
-            est = self.filter.get_est_meas(m, **kwargs)
-            meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
-            meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
-            v_s = cholesky(meas_pred_cov.T)
-            inv_sqrt_m_cov = inv(v_s)
-
-            for (ii, z) in enumerate(meas):
-                if ii in valid:
-                    continue
-                inov = z - est
-                dist = np.sum((inv_sqrt_m_cov.T @ inov)**2)
-                if dist < self.inv_chi2_gate:
-                    valid.append(ii)
-
-        valid.sort()
-        return [meas[ii] for ii in valid]
-
     def plot_states_labels(self, plt_inds, **kwargs):
         """ Plots the best estimate for the states and labels.
 
@@ -1934,11 +2086,9 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def correct_prob_density(self, meas, probDensity, **kwargs):
         self.filter._particles = probDensity.particles
-        qz = self.filter.correct(meas, **kwargs)[1]
+        cost = self.filter.correct(meas, **kwargs)[1]
         newProbDen = type(probDensity)
         newProbDen.particles = deepcopy(self.filter._particles)
-
-        cost = 0
 
         return newProbDen, cost
 
@@ -2027,4 +2177,5 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return idx_cmp
 
     def _gate_meas(self, meas, means, covs, **kwargs):
-        pass
+        warn('Mesurement gating not yet implemented for SMC-GLMB')
+        return meas
