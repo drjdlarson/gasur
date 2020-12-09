@@ -63,10 +63,12 @@ class ParticleDistribution:
 
     Attributes:
         particles (list): List of 2d numpy arrays, one per particle
+        weights (list): List of weights, one per particle
     """
 
     def __init__(self, **kwargs):
         self.particles = kwargs.get('particles', [])
+        self.weights = kwargs.get('weights', [])
 
     @property
     def mean(self):

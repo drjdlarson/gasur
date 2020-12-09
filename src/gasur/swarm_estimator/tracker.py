@@ -1247,11 +1247,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         log_cost = []
         birth_tab = []
-        for ii, (gm, p) in enumerate(self.birth_terms):
+        for ii, (distrib, p) in enumerate(self.birth_terms):
             cost = p / (1 - p)
             log_cost.append(-np.log(cost))
             entry = self._TabEntry()
-            entry.probDensity = deepcopy(gm)
+            entry.probDensity = deepcopy(distrib)
             entry.label = (time_step, ii)
             birth_tab.append(entry)
 
@@ -1273,11 +1273,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         # Init and propagate surviving track table
         surv_tab = []
         for (ii, track) in enumerate(self._track_tab):
-            gm = self.predict_prob_density(track.probDensity,
-                                           **kwargs)
+            distrib = self.predict_prob_density(track.probDensity, **kwargs)
 
             entry = self._TabEntry()
-            entry.probDensity = gm
+            entry.probDensity = distrib
             entry.meas_assoc_hist = deepcopy(track.meas_assoc_hist)
             entry.label = track.label
             surv_tab.append(entry)
@@ -2077,20 +2076,256 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
 
 class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    def __init__(self, **kwargs):
+        self.compute_prob_detection = kwargs.get('compute_prob_detection',
+                                                 None)
+        self.compute_prob_survive = kwargs.get('compute_prob_survive', None)
+
+        super().__init__(**kwargs)
+
+    def predict(self, **kwargs):
+        """ Prediction step of the GLMB filter.
+
+        This predicts new hypothesis, and propogates them to the next time
+        step. It also updates the cardinality distribution. Because this calls
+        the inner filter's predict function, the keyword arguments must contain
+        any information needed by that function.
+
+        Keyword Args:
+            time_step (int): Current time step number for the new labels
+        """
+
+        # Find cost for each birth track, and setup lookup table
+        time_step = kwargs['time_step']
+
+        log_cost = []
+        birth_tab = []
+        for ii, (distrib, p) in enumerate(self.birth_terms):
+            cost = p / (1 - p)
+            log_cost.append(-np.log(cost))
+            entry = self._TabEntry()
+            entry.probDensity = deepcopy(distrib)
+            entry.label = (time_step, ii)
+            birth_tab.append(entry)
+
+        # get K best hypothesis, and their index in the lookup table
+        (paths, hyp_cost) = k_shortest(np.array(log_cost), self.req_births)
+
+        # calculate association probabilities for birth hypothesis
+        tot_cost = 0
+        for c in hyp_cost:
+            tot_cost = tot_cost + np.exp(-c).item()
+        birth_hyps = []
+        for (p, c) in zip(paths, hyp_cost):
+            hyp = self._HypothesisHelper()
+            # NOTE: this may suffer from underflow and can be improved
+            hyp.assoc_prob = np.exp(-c).item() / tot_cost
+            hyp.track_set = p
+            birth_hyps.append(hyp)
+
+        # Init and propagate surviving track table
+        surv_tab = []
+        for (ii, track) in enumerate(self._track_tab):
+            distrib = self.predict_prob_density(track.probDensity, **kwargs)
+
+            entry = self._TabEntry()
+            entry.probDensity = distrib
+            entry.meas_assoc_hist = deepcopy(track.meas_assoc_hist)
+            entry.label = track.label
+            surv_tab.append(entry)
+
+        # Calculation for average survival/death probabilities
+        avg_prob_survive = np.zeros(len(self._track_tab))
+        for tabidx, ent in enumerate(self._track_tab):
+            p_surv = self.compute_prob_survive(ent.probDensity.particles,
+                                               **kwargs)
+            avg_prob_survive[tabidx] = np.sum(np.array(ent.probDensity.weights)
+                                              * p_surv)
+
+        avg_prob_death = 1 - avg_prob_survive
+
+        # loop over postierior components
+        surv_hyps = []
+        sum_sqrt_w = 0
+        for hyp in self._hypotheses:
+            sum_sqrt_w = sum_sqrt_w + np.sqrt(hyp.assoc_prob)
+        for hyp in self._hypotheses:
+            if hyp.num_tracks == 0:
+                new_hyp = self._HypothesisHelper()
+                new_hyp.assoc_prob = np.log(hyp.assoc_prob)
+                new_hyp.track_set = hyp.track_set
+                surv_hyps.append(new_hyp)
+            else:
+                cost = avg_prob_survive[hyp.track_set] \
+                    / avg_prob_death[hyp.track_set]
+                log_cost = -np.log(cost)
+                k = np.round(self.req_surv * np.sqrt(hyp.assoc_prob)
+                             / sum_sqrt_w)
+                (paths, hyp_cost) = k_shortest(np.array(log_cost), k)
+
+                pdeath_log = np.sum([np.log(avg_prob_death[ii])
+                                     for ii in hyp.track_set])
+
+                for (p, c) in zip(paths, hyp_cost):
+                    new_hyp = self._HypothesisHelper()
+                    new_hyp.assoc_prob = pdeath_log \
+                        + np.log(hyp.assoc_prob) - c.item()
+                    if len(p) > 0:
+                        new_hyp.track_set = [hyp.track_set[ii] for ii in p]
+                    else:
+                        new_hyp.track_set = []
+                    surv_hyps.append(new_hyp)
+
+        lse = log_sum_exp([x.assoc_prob for x in surv_hyps])
+        for ii in range(0, len(surv_hyps)):
+            surv_hyps[ii].assoc_prob = np.exp(surv_hyps[ii].assoc_prob - lse)
+
+        # Get  predicted hypothesis by convolution
+        self._track_tab = birth_tab + surv_tab
+        self._hypotheses = []
+        tot_w = 0
+        for b_hyp in birth_hyps:
+            for s_hyp in surv_hyps:
+                new_hyp = self._HypothesisHelper()
+                new_hyp.assoc_prob = b_hyp.assoc_prob * s_hyp.assoc_prob
+                tot_w = tot_w + new_hyp.assoc_prob
+                surv_lst = []
+                for x in s_hyp.track_set:
+                    surv_lst.append(x + len(birth_tab))
+                new_hyp.track_set = b_hyp.track_set + surv_lst
+                self._hypotheses.append(new_hyp)
+
+        for ii in range(0, len(self._hypotheses)):
+            self._hypotheses[ii].assoc_prob = (self._hypotheses[ii].assoc_prob
+                                               / tot_w)
+        self._card_dist = self.calc_card_dist(self._hypotheses)
+        self._clean_predictions()
+
     def predict_prob_density(self, probDensity, **kwargs):
         self.filter._particles = probDensity.particles
         self.filter.predict(**kwargs)
-        newProbDen = type(probDensity)
+        cls_type = type(probDensity)
+        newProbDen = cls_type()
         newProbDen.particles = deepcopy(self.filter._particles)
+        newProbDen.weights = [w * self.prob_survive
+                              for w in probDensity.weights]
+        tot = sum(newProbDen.weights)
+        newProbDen.weights = [w / tot for w in newProbDen.weights]
         return newProbDen
+
+    def correct(self, **kwargs):
+        meas = deepcopy(kwargs['meas'])
+        del kwargs['meas']
+
+        self._meas_tab.append(meas)
+        num_meas = len(meas)
+
+        # missed detection tracks
+        num_pred = len(self._track_tab)
+        up_tab = []
+        for ii in range(0, (num_meas + 1) * num_pred):
+            up_tab.append(self._TabEntry())
+
+        for ii, track in enumerate(self._track_tab):
+            up_tab[ii] = deepcopy(track)
+            up_tab[ii].meas_assoc_hist.append(None)
+
+        # measurement updated tracks
+        all_cost_m = np.zeros((num_pred, num_meas))
+        for emm, z in enumerate(meas):
+            for ii, ent in enumerate(self._track_tab):
+                s_to_ii = num_pred * emm + ii + num_pred
+                (up_tab[s_to_ii].probDensity, cost) = \
+                    self.correct_prob_density(z, ent.probDensity,
+                                              **kwargs)
+
+                # update association history with current measurement index
+                up_tab[s_to_ii].meas_assoc_hist = ent.meas_assoc_hist + [emm]
+                up_tab[s_to_ii].label = ent.label
+                all_cost_m[ii, emm] = cost
+
+        # Calculation for average detection/missed probabilities
+        avg_prob_detect = np.zeros(len(self._track_tab))
+        for tabidx, ent in enumerate(self._track_tab):
+            p_detect = self.compute_prob_detection(ent.probDensity.particles,
+                                                   **kwargs)
+            avg_prob_detect[tabidx] = np.sum(np.array(ent.probDensity.weights)
+                                             * p_detect)
+
+        avg_prob_miss_detect = 1 - avg_prob_detect
+
+        # component updates
+        up_hyp = []
+        if num_meas == 0:
+            for hyp in self._hypotheses:
+                pmd_log = np.sum([np.log(avg_prob_miss_detect[ii])
+                                  for ii in hyp.track_set])
+                hyp.assoc_prob = -self.clutter_rate + hyp.num_tracks \
+                    * pmd_log + np.log(hyp.assoc_prob)
+                up_hyp.append(hyp)
+        else:
+            clutter = self.clutter_rate * self.clutter_den
+            ss_w = 0
+            for p_hyp in self._hypotheses:
+                ss_w += np.sqrt(p_hyp.assoc_prob)
+            for p_hyp in self._hypotheses:
+                if p_hyp.num_tracks == 0:  # all clutter
+                    new_hyp = self._HypothesisHelper()
+                    new_hyp.assoc_prob = -self.clutter_rate + num_meas \
+                        * np.log(clutter) + np.log(p_hyp.assoc_prob)
+                    new_hyp.track_set = p_hyp.track_set
+                    up_hyp.append(new_hyp)
+
+                else:
+                    len_a_pmd = len(avg_prob_miss_detect[p_hyp.track_set])
+                    a_pmd = avg_prob_miss_detect[p_hyp.track_set]
+                    a_pmd = a_pmd.reshape((len_a_pmd, 1))
+                    pmd = np.tile(a_pmd, (1, num_meas))
+                    cost_m = all_cost_m[p_hyp.track_set, :] \
+                        / (clutter * pmd)
+                    neg_log = -np.log(cost_m)
+                    m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
+                                 / ss_w)
+                    m = int(m.item())
+                    [assigns, costs] = murty_m_best(neg_log, m)
+
+                    pmd_log = np.sum([np.log(avg_prob_miss_detect[ii])
+                                      for ii in p_hyp.track_set])
+                    for (a, c) in zip(assigns, costs):
+                        new_hyp = self._HypothesisHelper()
+                        new_hyp.assoc_prob = -self.clutter_rate + num_meas \
+                            * np.log(clutter) + p_hyp.num_tracks \
+                            * pmd_log + np.log(p_hyp.assoc_prob) - c
+                        lst1 = [num_pred * x for x in a]
+                        lst2 = p_hyp.track_set.copy()
+                        new_hyp.track_set = [sum(x) for x in zip(lst1, lst2)]
+                        up_hyp.append(new_hyp)
+
+        lse = log_sum_exp([x.assoc_prob for x in up_hyp])
+        for ii in range(0, len(up_hyp)):
+            up_hyp[ii].assoc_prob = np.exp(up_hyp[ii].assoc_prob - lse)
+
+        self._track_tab = up_tab
+        self._hypotheses = up_hyp
+        self._card_dist = self.calc_card_dist(self._hypotheses)
+        self._clean_updates()
 
     def correct_prob_density(self, meas, probDensity, **kwargs):
         self.filter._particles = probDensity.particles
-        cost = self.filter.correct(meas, **kwargs)[1]
-        newProbDen = type(probDensity)
+        cls_type = type(probDensity)
+        newProbDen = cls_type()
+
+        likelihood, inds_removed = self.filter.correct(meas, **kwargs)[1:3]
+
+        newProbDen.weights = self.prob_detection * np.array(likelihood) \
+            * np.array([probDensity.weights[ii] for ii in inds_removed])
+        tot = sum(newProbDen.weights)
+        if tot > 0:
+            newProbDen.weights = [w / tot for w in newProbDen.weights]
+
         newProbDen.particles = deepcopy(self.filter._particles)
 
-        return newProbDen, cost
+        return newProbDen, tot
 
     def extract_states(self, **kwargs):
         """ Extracts the best state estimates.
@@ -2158,7 +2393,8 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 tt = b_time + t_after_b
                 if emm is not None:
                     meas = self._meas_tab[tt][emm].copy()
-                    pd = self.correct_prob_density(meas, pd, **kwargs)[0]
+                    pd = self.correct_prob_density(meas, pd,
+                                                   **kwargs)[0]
 
                 # find best one and add to state table
                 new_state = pd.mean
