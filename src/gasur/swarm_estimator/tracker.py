@@ -2076,6 +2076,21 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
 
 class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    """ This implements a Sequential Monte Carlo GLMB filter.
+
+    This is based on :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
+    It does not account for agents spawned from existing tracks, only agents
+    birthed from the given birth model.
+
+    Attributes:
+        compute_prob_detection (function): Must take a likst of particles as
+            the first argument and kwargs as the next. Returns the average
+            probability of detection for the list of particles
+        compute_prob_survive (function): Must take a likst of particles as
+            the first argument and kwargs as the next. Returns the average
+            probability of survival for the list of particles
+    """
+
     def __init__(self, **kwargs):
         self.compute_prob_detection = kwargs.get('compute_prob_detection',
                                                  None)
@@ -2202,6 +2217,19 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         self._clean_predictions()
 
     def predict_prob_density(self, probDensity, **kwargs):
+        """ This predicts the next probability density.
+
+
+        Args:
+            probDensity (:py:mod:`gasur.utilities.distributions`): Probability
+                distribution to use for prediction
+            **kwargs (dict): Passed through to the filters predict function.
+
+        Returns:
+            newProbDen (:py:mod:`gasur.utilities.distributions`): Predicted
+                probability distribution.
+
+        """
         self.filter._particles = probDensity.particles
         self.filter.predict(**kwargs)
         cls_type = type(probDensity)
@@ -2214,6 +2242,19 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return newProbDen
 
     def correct(self, **kwargs):
+        """ Correction step of the GLMB filter.
+
+        This corrects the hypotheses based on the measurements and gates the
+        measurements according to the class settings. It also updates the
+        cardinality distribution. Because this calls the inner filter's correct
+        function, the keyword arguments must contain any information needed by
+        that function.
+
+        Keyword Args:
+            meas (list): List of Nm x 1 numpy arrays that contain all the
+                measurements needed for this correction
+        """
+
         meas = deepcopy(kwargs['meas'])
         del kwargs['meas']
 
@@ -2311,6 +2352,22 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         self._clean_updates()
 
     def correct_prob_density(self, meas, probDensity, **kwargs):
+        """ This corrects the probability density and resamples.
+
+
+        Args:
+            meas (numpy array): Measurement vector as a 2D numpy array
+            probDensity (:py:mod:`gasur.utilities.distributions`): Probability
+                distribution to use for prediction
+            **kwargs (dict): Passed through to the filters correct function.
+
+        Returns:
+            tuple containing
+
+                - (:py:mod:`gasur.utilities.distributions`): Corrected
+                and resampledprobability distribution.
+                - (float): Sum of the unnormalized weights
+        """
         self.filter._particles = probDensity.particles
         cls_type = type(probDensity)
         newProbDen = cls_type()

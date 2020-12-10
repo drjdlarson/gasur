@@ -2,10 +2,14 @@ import pytest
 import numpy as np
 import numpy.testing as test
 import numpy.random as rnd
+import scipy.stats as stats
+from copy import deepcopy
+import scipy.linalg as la
 
 import gasur.swarm_estimator.tracker as tracker
-import gncpy.filters as filters
 import gasur.utilities.distributions as distributions
+from gncpy.math import rk4
+import gncpy.filters as filters
 
 
 class TestGeneralizedLabeledMultiBernoulli:
@@ -213,3 +217,175 @@ def test_STMGeneralizedLabeledMultiBernoulli():
 
     glmb.extract_states()
     assert glmb.cardinality == 4, "Cardinality does not match"
+
+
+def test_SMCGeneralizedLabeledMultiBernoulli():
+    rng = rnd.default_rng(1)
+
+    max_time = 10
+    dt = 1.0
+    num_parts = 1000
+    sig_w = 5.0
+    sig_u = np.pi / 180
+    std_turn = 2 * (np.pi / 180)
+    std_pos = 10.0
+    prob_detection = 0.98
+    prob_survive = 0.99
+
+    G = np.array([[dt**2 / 2, 0, 0],
+                  [dt, 0, 0],
+                  [0, dt**2 / 2, 0],
+                  [0, dt, 0],
+                  [0, 0, 1]])
+    Q = la.block_diag(sig_w**2 * np.eye(2), np.array([[sig_u**2]]))
+
+    def compute_prob_detection(part_lst, **kwargs):
+        if len(part_lst) == 0:
+            return np.array([])
+        else:
+            inv_std = np.diag(np.array([1. / 2000., 1. / 2000.]))
+
+            e_sq = np.sum(np.hstack([(inv_std
+                                      @ x[[0, 2], 0].reshape((2, 1)))**2
+                                     for x in part_lst]), axis=0)
+            return prob_detection * np.exp(-e_sq / 2.)
+
+    def compute_prob_survive(part_lst, **kwargs):
+        if len(part_lst) == 0:
+            return np.array([])
+        else:
+            return prob_survive * np.ones(len(part_lst))
+
+    def meas_mod(state, **kwargs):
+        z1 = np.arctan2(state[2, 0], state[0, 0])
+        z2 = np.sqrt(np.sum(state.flatten()**2))
+        return np.array([[z1], [z2]])
+
+    def meas_likelihood(meas, est, **kwargs):
+        cov = np.array([[std_turn**2, 0],
+                        [0, std_pos**2]])
+        return stats.multivariate_normal.pdf(meas.copy().reshape(meas.size),
+                                             mean=est.copy().reshape(est.size),
+                                             cov=cov)
+
+    # returns x_dot
+    def f0(x, **kwargs):
+        return x[1]
+
+    # returns x_dot_dot
+    def f1(x, **kwargs):
+        return -x[4] * x[3]
+
+    # returns y_dot
+    def f2(x, **kwargs):
+        return x[3]
+
+    # returns y_dot_dot
+    def f3(x, **kwargs):
+        return x[4] * x[1]
+
+    # returns omega_dot
+    def f4(x, **kwargs):
+        return 0
+
+    # \dot{x} = f(x)
+    def cont_dyn(x, **kwargs):
+        out = np.zeros(x.shape)
+        for ii, f in enumerate([f0, f1, f2, f3, f4]):
+            out[ii] = f(x, **kwargs)
+        return out
+
+    # x_{k + 1} = f(x_{k})
+    def dyn_fnc(x, noise_on=True, **kwargs):
+        ctrl = np.zeros((2, 1))
+        ns = rk4(cont_dyn, x.copy(), dt, cur_input=ctrl)
+        if noise_on:
+            ns += G @ Q @ G.T @ rng.standard_normal(ns.shape)
+        return ns
+
+    means = [np.array([-1500., 0., 250., 0., 0.]).reshape((5, 1)),
+             np.array([-250., 0., 1000., 0., 0.]).reshape((5, 1)),
+             np.array([250., 0., 750., 0., 0.]).reshape((5, 1)),
+             np.array([1000., 0., 1500., 0., 0.]).reshape((5, 1))]
+    cov = np.diag(np.array([50, 50, 50, 50, 6 * (np.pi / 180)]))**2
+    b_probs = [0.02, 0.02, 0.03, 0.03]
+    birth_terms = []
+    for (m, p) in zip(means, b_probs):
+        parts = [rng.multivariate_normal(m.flatten(),
+                                         cov).reshape(m.shape)
+                 for ii in range(0, num_parts)]
+        weights = [1 / num_parts] * num_parts
+        distrib = distributions.ParticleDistribution(particles=parts,
+                                                     weights=weights)
+        birth_terms.append((distrib, p))
+
+    filt = filters.ParticleFilter()
+    filt.set_meas_model(meas_mod)
+    filt.dyn_fnc = dyn_fnc
+    filt.meas_noise = np.diag([std_turn**2, std_pos**2])
+    filt.set_proc_noise(mat=G @ Q @ G.T)
+    filt.meas_likelihood_fnc = meas_likelihood
+
+    glmb = tracker.SMCGeneralizedLabeledMultiBernoulli()
+    glmb.filter = filt
+    glmb.compute_prob_detection = compute_prob_detection
+    glmb.compute_prob_survive = compute_prob_survive
+    glmb.prob_detection = prob_detection
+    glmb.prob_survive = prob_survive
+    glmb.birth_terms = birth_terms
+    glmb.req_births = 5
+    glmb.req_surv = 5000
+    glmb.req_upd = 5000
+    glmb.gating_on = False
+    glmb.clutter_rate = 0.0000001  # 10
+    glmb.clutter_den = 1 / (np.pi * 2000)
+
+    def prop_states(k, true_states, dt, noise_on=True):
+        new_states = []
+        for s in true_states:
+            ns = dyn_fnc(s.copy(), noise_on=noise_on)
+            new_states.append(ns)
+
+        wturn = 2 * np.pi / 180
+        if k == 0:
+            s = np.array([1000 + 3.8676, -10, 1500 - 11.7457, -10, wturn / 8])
+            new_states.append(s.reshape((5, 1)))
+
+        return new_states
+
+    def gen_meas(true_states):
+        meas = []
+        for s in true_states:
+            if rng.random() <= compute_prob_detection([s]):
+                m = meas_mod(s)
+                m += np.array([[std_turn], [std_pos]]) \
+                    * rng.standard_normal(size=m.shape)
+                meas.append(m)
+
+        num_clutt = rng.poisson(glmb.clutter_rate)
+        for ii in range(0, num_clutt):
+            m = np.array([[np.pi], [2000]]) * rng.standard_normal(size=(2, 1))
+            meas.append(m)
+
+        return meas
+
+    true_states = []
+    total_true = []
+    for k in range(0, max_time):
+        print(k)
+        true_states = prop_states(k, true_states, dt, noise_on=True)
+        total_true.append(deepcopy(true_states))
+
+        # generate measurements
+        meas = gen_meas(true_states)
+
+        # run filter
+        glmb.predict(time_step=k, dt=dt)
+        glmb.correct(meas=meas)
+        glmb.prune()
+        glmb.cap()
+
+    glmb.extract_states(dt=dt)
+    assert glmb.cardinality == 1, "Cardinality does not match"
+
+    # glmb.plot_states_labels([0, 2], true_states=total_true)
