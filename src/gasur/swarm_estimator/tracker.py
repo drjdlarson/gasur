@@ -1577,16 +1577,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                    if a in self._lab_mem]
         new_ii = [labels.index(a) for a in either if a in labels]
 
-        # self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
-        #     + [labels[ii] for ii in surv_ii] \
-        #     + [labels[ii] for ii in new_ii]
-        # self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
-        #     + [meas_hists[ii] for ii in surv_ii] \
-        #     + [meas_hists[ii] for ii in new_ii]
-        self._lab_mem = [labels[ii] for ii in surv_ii] \
+        self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
+            + [labels[ii] for ii in surv_ii] \
             + [labels[ii] for ii in new_ii]
-        self._meas_asoc_mem = [meas_hists[ii] for ii in surv_ii] \
+        self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
+            + [meas_hists[ii] for ii in surv_ii] \
             + [meas_hists[ii] for ii in new_ii]
+        # self._lab_mem = [labels[ii] for ii in surv_ii] \
+        #     + [labels[ii] for ii in new_ii]
+        # self._meas_asoc_mem = [meas_hists[ii] for ii in surv_ii] \
+        #     + [meas_hists[ii] for ii in new_ii]
 
         self._states = [None] * len(self._meas_tab)
         self._labels = [None] * len(self._meas_tab)
