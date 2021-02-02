@@ -16,7 +16,7 @@ from warnings import warn
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
-import gasur.utilities.plotting as pltUtil
+import gncpy.plotting as pltUtil
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
