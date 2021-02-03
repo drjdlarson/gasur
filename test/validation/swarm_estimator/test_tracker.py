@@ -125,8 +125,13 @@ def test_STMGeneralizedLabeledMultiBernoulli():
     proc_noise_dof = 3
     meas_noise_dof = 3
 
-    proc_noise_scale = 0.01 * np.eye(4)
-    meas_noise_scale = 0.5**2 * np.eye(2)
+    factor = (proc_noise_dof - 2) / proc_noise_dof
+    proc_noise_scale = factor * 0.5**2 * np.eye(4)
+    sqrt_proc_scale = la.cholesky(proc_noise_scale)
+
+    factor = (meas_noise_dof - 2) / meas_noise_dof
+    meas_noise_scale = factor * 0.1**2 * np.eye(2)
+    sqrt_meas_scale = la.cholesky(meas_noise_scale)
 
     filt = filters.StudentsTFilter()
     filt.set_state_mat(mat=state_mat)
@@ -140,38 +145,46 @@ def test_STMGeneralizedLabeledMultiBernoulli():
 
     glmb = tracker.STMGeneralizedLabeledMultiBernoulli()
     glmb.filter = filt
-    glmb.prob_detection = 0.98
+    glmb.prob_detection = 0.9999
     glmb.prob_survive = 0.99
 
     dof = 3
     mu = [np.array([-1500., 250., 0, 0]).reshape((4, 1))]
-    scale = [dof / (dof - 2) * np.diag(np.array([50, 50, 10, 10]))**2]
-    # scale = [np.diag(np.array([50, 50, 10, 10]))**2]
+    scale = [dof / (dof - 2) * np.diag(np.array([15, 15, 5, 5]))**2]
     stm0 = distributions.StudentsTMixture(means=mu, scalings=scale,
                                           weights=[1], dof=dof)
     mu = [np.array([-250., 1000., 0, 0.]).reshape((4, 1))]
-    stm1 = distributions.StudentsTMixture(means=mu, scalings=scale,
+    stm1 = distributions.StudentsTMixture(means=mu, scalings=scale.copy(),
                                           weights=[1], dof=dof)
     mu = [np.array([250., 750., 0, 0]).reshape((4, 1))]
-    stm2 = distributions.StudentsTMixture(means=mu, scalings=scale,
+    stm2 = distributions.StudentsTMixture(means=mu, scalings=scale.copy(),
                                           weights=[1], dof=dof)
     mu = [np.array([1000.,  1500., 0, 0]).reshape((4, 1))]
-    stm3 = distributions.StudentsTMixture(means=mu, scalings=scale,
+    stm3 = distributions.StudentsTMixture(means=mu, scalings=scale.copy(),
                                           weights=[1], dof=dof)
 
-    glmb.birth_terms = [(stm0, 0.02), (stm1, 0.02), (stm2, 0.03), (stm3, 0.03)]
+    glmb.birth_terms = [(stm0, 0.02), (stm1, 0.02), (stm2, 0.02), (stm3, 0.02)]
+    b_probs = [x[1] for x in glmb.birth_terms]
+    b_probs.append(1 - sum(b_probs))
     glmb.req_births = 5
     glmb.req_surv = 3000
     glmb.req_upd = 3000
     glmb.gating_on = False
     glmb.inv_chi2_gate = 32.2361913029694
-    glmb.clutter_rate = 0.0005
+    glmb.clutter_rate = 0.00005
     glmb.clutter_den = 1 / np.prod(pos_bnds[:, 1] - pos_bnds[:, 0])
     glmb.save_covs = True
 
     true_states = []
+    true_plt_states = []
     for tt in range(0, 15):
-        glmb.predict(time_step=tt)
+
+        for ii in range(0, len(true_states)):
+            x = true_states[ii]
+            t = rng.standard_t(proc_noise_dof, size=x.size).reshape(x.shape)
+            proc_noise = sqrt_proc_scale @ t
+            x = state_mat @ x + proc_noise
+            true_states[ii] = x
 
         meas = []
         if tt == 0:
@@ -188,22 +201,13 @@ def test_STMGeneralizedLabeledMultiBernoulli():
             m = np.array([250 + 10, 750 - 16., 7, -3]).reshape((4, 1))
             true_states.append(m)
 
+        true_plt_states.append(deepcopy(true_states))
+
         for x in true_states:
             m = meas_mat @ x
-            s_norm = rng.multivariate_normal(np.zeros(m.size),
-                                             meas_noise_scale)
-            s_norm = s_norm.reshape(m.shape)
-            s_chi = rng.chisquare(meas_noise_dof)
-            meas.append(m + s_norm * np.sqrt(meas_noise_dof / s_chi))
-
-        for ii in range(0, len(true_states)):
-            x = true_states[ii]
-            s_norm = rng.multivariate_normal(np.zeros(x.size),
-                                             proc_noise_scale)
-            s_norm = s_norm.reshape(x.shape)
-            s_chi = rng.chisquare(proc_noise_dof)
-            x = state_mat @ x + (s_norm * np.sqrt(proc_noise_dof / s_chi))
-            true_states[ii] = x
+            t = rng.standard_t(meas_noise_dof, size=m.size).reshape(m.shape)
+            meas_noise = sqrt_meas_scale @ t
+            meas.append(m + meas_noise)
 
         num_clutt = rng.poisson(glmb.clutter_rate)
         for ii in range(0, num_clutt):
@@ -211,11 +215,18 @@ def test_STMGeneralizedLabeledMultiBernoulli():
                 * rng.random((pos_bnds.shape[0], 1))
             meas.append(m)
 
+        glmb.predict(time_step=tt)
         glmb.correct(meas=meas)
         glmb.prune()
         glmb.cap()
+        glmb.extract_states()
 
-    glmb.extract_states()
+    glmb.plot_states_labels([0, 1], true_states=true_plt_states,
+                            meas_inds=[0, 1], sig_bnd=None)
+    # print("Cardinality:")
+    # print(glmb.cardinality)
+    # print("labels")
+    # print(glmb.labels)
     assert glmb.cardinality == 4, "Cardinality does not match"
 
 

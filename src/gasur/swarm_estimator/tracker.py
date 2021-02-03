@@ -1259,16 +1259,18 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         (paths, hyp_cost) = k_shortest(np.array(log_cost), self.req_births)
 
         # calculate association probabilities for birth hypothesis
-        tot_cost = 0
-        for c in hyp_cost:
-            tot_cost = tot_cost + np.exp(-c).item()
         birth_hyps = []
+        tot_b_prob = sum([np.log(1 - x[1]) for x in self.birth_terms])
         for (p, c) in zip(paths, hyp_cost):
             hyp = self._HypothesisHelper()
             # NOTE: this may suffer from underflow and can be improved
-            hyp.assoc_prob = np.exp(-c).item() / tot_cost
+            hyp.assoc_prob = tot_b_prob - c.item()
             hyp.track_set = p
             birth_hyps.append(hyp)
+
+        lse = log_sum_exp([x.assoc_prob for x in birth_hyps])
+        for ii in range(0, len(birth_hyps)):
+            birth_hyps[ii].assoc_prob = np.exp(birth_hyps[ii].assoc_prob - lse)
 
         # Init and propagate surviving track table
         surv_tab = []
@@ -1435,7 +1437,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     new_hyp = self._HypothesisHelper()
                     new_hyp.assoc_prob = -self.clutter_rate + num_meas \
                         * np.log(clutter) + np.log(p_hyp.assoc_prob)
-                    new_hyp.track_set = p_hyp.track_set
+                    new_hyp.track_set = p_hyp.track_set.copy()
                     up_hyp.append(new_hyp)
 
                 else:
@@ -1583,10 +1585,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
             + [meas_hists[ii] for ii in surv_ii] \
             + [meas_hists[ii] for ii in new_ii]
-        # self._lab_mem = [labels[ii] for ii in surv_ii] \
-        #     + [labels[ii] for ii in new_ii]
-        # self._meas_asoc_mem = [meas_hists[ii] for ii in surv_ii] \
-        #     + [meas_hists[ii] for ii in new_ii]
 
         self._states = [None] * len(self._meas_tab)
         self._labels = [None] * len(self._meas_tab)
