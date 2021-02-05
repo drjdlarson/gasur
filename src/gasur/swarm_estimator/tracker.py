@@ -17,6 +17,7 @@ from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
 import gasur.utilities.plotting as pltUtil
+from gasur.utilities.sampling import gibbs
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -2472,3 +2473,202 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
     def _gate_meas(self, meas, means, covs, **kwargs):
         warn('Mesurement gating not yet implemented for SMC-GLMB')
         return meas
+
+class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+
+    def _gate_meas(self, meas, means, covs, **kwargs):
+        """
+        This gates measurements assuming a kalman filter (Gaussian noise).
+        See :cite:`Cox1993_AReviewofStatisticalDataAssociationTechniquesforMotionCorrespondence`
+        for details on the chi squared test used.
+
+        Args:
+            meas (list): each element is a 2d numpy array
+            means (list): each element is a 2d numpy array
+            covs (list): each element is a 2d numpy array
+            **kwargs (kwargs): Passed to the filters measurement matrix and
+            estimated measurement functions.
+
+        Returns:
+            list: Measurements passing gating criteria.
+        """
+        if len(meas) == 0:
+            return []
+
+        valid = []
+        for (m, p) in zip(means, covs):
+            meas_mat = self.filter.get_meas_mat(m, **kwargs)
+            est = self.filter.get_est_meas(m, **kwargs)
+            meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
+            meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
+            v_s = cholesky(meas_pred_cov.T)
+            inv_sqrt_m_cov = inv(v_s)
+
+        for (ii, z) in enumerate(meas):
+            if ii in valid:
+                continue
+            inov = z - est
+            dist = np.sum((inv_sqrt_m_cov.T @ inov)**2)
+            if dist < self.inv_chi2_gate:
+                valid.append(ii)
+
+        valid.sort()
+        return [valid]
+
+    def predict(self, **kwargs):
+            """ Prediction step of the GLMB filter.
+    
+            This predicts new hypothesis, and propogates them to the next time
+            step. It also updates the cardinality distribution. Because this calls
+            the inner filter's predict function, the keyword arguments must contain
+            any information needed by that function.
+    
+            Keyword Args:
+                time_step (int): Current time step number for the new labels
+            """
+
+    def correct(self, **kwargs):
+        """ Correction step of the GLMB filter.
+
+            This corrects the hypotheses based on the measurements and gates the
+            measurements according to the class settings. It also updates the
+            cardinality distribution. Because this calls the inner filter's correct
+            function, the keyword arguments must contain any information needed by
+            that function.
+    
+            Keyword Args:
+            meas (list): List of Nm x 1 numpy arrays that contain all the
+                    measurements needed for this correction
+            """
+        # Birth Track Table
+        time_step = kwargs['time_step']
+        birth_tab = []
+        for ii, (distrib, p) in enumerate(self.birth_terms):
+            entry = self._TabEntry()
+            entry.probDensity = deepcopy(distrib)
+            entry.label = (time_step, ii)
+            birth_tab.append(entry)
+        # Survival Track Table
+        surv_tab = []
+        for (ii, track) in enumerate(self._track_tab):
+            distrib = self.predict_prob_density(track.probDensity, **kwargs)
+
+            entry = self._TabEntry()
+            entry.probDensity = distrib
+            entry.meas_assoc_hist = deepcopy(track.meas_assoc_hist)
+            entry.label = track.label
+            surv_tab.append(entry)
+        predict_track_tab = birth_tab + surv_tab
+
+        meas = deepcopy(kwargs['meas'])
+        del kwargs['meas']
+
+        # gating by tracks
+        if self.gating_on:
+            for ent in predict_track_tab:
+                ent.gatemeas = self._gate_meas(meas, ent.probDensity.means, ent.probDensity.covariances)
+        else:
+            for ent in predict_track_tab:
+                ent.gatemeas = np.arange(0, np.shape(meas)[1]) # maybe np.shape... +1?
+        
+        # Pre-calculation of average survival/death probabilities
+        avg_surv = []
+        for ii in range(0, np.shape(self.birth_terms)[0]):
+            avg_surv.append(self.birth_terms[ii][1])
+        for ii in range(0, len(self._track_tab)):
+            avg_surv.append(self.prob_survive)
+        avg_death = 1 - avg_surv
+
+        # Pre-calculation of average detection/missed probabilities
+        avg_detect = []
+        for ii in range(0, len(predict_track_tab)):
+            avg_detect.append(self.prob_detection)
+        avg_miss = 1 - avg_detect
+        
+        num_meas = np.shape(meas)[1]
+
+        # missed detection tracks
+        num_pred = len(self._track_tab)
+        up_tab = []
+        for ii in range(0, (num_meas + 1) * num_pred):
+            up_tab.append(self._TabEntry())
+
+        for ii, track in enumerate(self._track_tab):
+            up_tab[ii] = deepcopy(track)
+            up_tab[ii].meas_assoc_hist.append(None)
+            
+        # measurement updated tracks
+        all_cost_m = np.zeros((num_pred, num_meas))
+        for emm, z in enumerate(meas):
+            for ii, ent in enumerate(self._track_tab):
+                s_to_ii = num_pred * emm + ii + num_pred
+                (up_tab[s_to_ii].probDensity, cost) = \
+                    self.correct_prob_density(z, ent.probDensity,
+                                              **kwargs)
+
+                # update association history with current measurement index
+                up_tab[s_to_ii].meas_assoc_hist = ent.meas_assoc_hist + [emm]
+                up_tab[s_to_ii].label = ent.label
+                all_cost_m[ii, emm] = cost
+        clutter = self.clutter_rate * self.clutter_den
+        # Joint Cost Matrix
+        joint_cost = np.concatenate((np.diag(avg_death),
+                                     np.diag(avg_surv*avg_miss)),
+                        kron(ones((1,m)),avg_surv*avg_detect)*all_cost_m/(clutter),
+                                     axis=1)
+        # Gated Measurement index matrix
+        gate_meas_indices = np.zeros(length(glmb_predict.tt), num_meas)
+        for ii in range(0, len(predict_track_tab)):
+            for jj in range(0, len(predict_track_tab[ii].gatemeas)):
+                gate_meas_indices[ii][jj] = predict_track_tab[ii].gatemeas[jj]
+        gate_meas_indc = gate_meas_indices > 0
+        # Component updates
+        for p_hyp in self._hypotheses:
+            ss_w += np.sqrt(p_hyp.assoc_prob)
+        for p_hyp in self._hypotheses:
+            cpreds = len(predict_track_tab)
+            num_births = np.shape(self.birth_terms)[0]
+            num_exists = len(p_hyp.track_set)
+            num_tracks = num_births + num_exists
+            tindices = np.concatenate((np.arange(0, num_births), num_births + p_hyp.track_set))
+            lselmask = np.zeros((len(predict_track_tab), num_meas), dtype='bool')
+            lselmask[tindices, ] = gate_meas_indc[tindices, ]
+            keys = gate_meas_indices[lselmask].ravel().sort()
+            difference = diff([keys, np.nan], n=1, axis=0)
+            keyind = np.not_equal(difference, 0)
+            mindices = keys[keyind]
+            cost_m = np.concatenate((joint_cost[tindices], joint_cost[cpreds+tindices], joint_cost[2*cpreds+mindices]))
+            neg_log = -np.log(cost_m)
+            m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)/ ss_w)
+            m = int(m.item())
+
+            [assigns, costs] = gibbs(neg_log, m) # (rename)
+            #this whole section may need to be redone or re-evaluated based on how indexing works in python vs matlab
+            assigns[assigns<=ntracks] = -np.inf
+            for ii in range(np.shape(assigns)[0]):
+                for jj in range(np.shape(assigns)[1]):
+                    if assigns[ii][jj] > ntracks and assigns[ii][jj] <= 2*ntracks:
+                        assigns[ii][jj] = 0
+            assigns[assigns>2*ntracks] = assigns[assigns>2*ntracks]-2*ntracks
+            assigns[assigns>0] = mindices[assigns[assigns>0]]
+
+            #hypothesis components
+            for c in range(0, len(costs)):
+                update_hyp_cmp_temp = assigns[c, ]
+                update_hyp_cmp_idx = cpreds*update_hyp_cmp_temp + \
+                np.concatenate((np.arange(0, num_births)), num_births \
+                                   + self._hypotheses.track_set)
+                new_hyp = self._HypothesisHelper()
+                new_hyp.assoc_prob = clutter_rate + num_meas *np.log(clutter) \
+                    + np.log(p_hyp.assoc_prob)
+                new_hyp.track_set = update_hyp_cmp_idx[update_hyp_cmp_idx>0]
+                up_hyp.append(new_hyp)                        
+
+        lse = log_sum_exp([x.assoc_prob for x in up_hyp])
+        for ii in range(0, len(up_hyp)):
+            up_hyp[ii].assoc_prob = np.exp(up_hyp[ii].assoc_prob - lse)
+
+        self._track_tab = up_tab
+        self._hypotheses = up_hyp
+        self._card_dist = self.calc_card_dist(self._hypotheses)
+        self._clean_updates()
