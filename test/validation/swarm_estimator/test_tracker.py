@@ -240,12 +240,12 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         self.dt = 1.0
 
         # proc noise
-        self.sig_w = 5.0
+        self.sig_w = 2.5
         self.sig_u = np.pi / 180
 
         # meas noise
-        self.std_turn = 2 * (np.pi / 180)
-        self.std_pos = 10.0
+        self.std_turn = 0.25 * (np.pi / 180)
+        self.std_pos = 5.0
 
         self.prob_detection = 0.98
         self.prob_survive = 0.99
@@ -374,7 +374,7 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         mean = np.zeros(cov.shape[0])
         samp = self.rng.multivariate_normal(mean, cov)
         samp = samp.reshape((samp.size, 1))
-        return self.G @ samp
+        return x + self.G @ samp
 
     def proposal_fnc(self, x_hat, cond, **kwargs):
         cov = self.Q  # proc cov
@@ -393,12 +393,14 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         b_probs = [0.02, 0.02, 0.03, 0.03]
         birth_terms = []
         for (m, p) in zip(means, b_probs):
-            parts = [self.rng.multivariate_normal(m.flatten(),
-                                                  cov).reshape(m.shape)
-                     for ii in range(0, num_parts)]
-            weights = [1 / num_parts] * num_parts
-            distrib = distributions.ParticleDistribution(particles=parts,
-                                                         weights=weights)
+            distrib = distributions.ParticleDistribution()
+            for ii in range(0, num_parts):
+                part = distributions.Particle()
+                part.point = self.rng.multivariate_normal(m.flatten(),
+                                                          cov).reshape(m.shape)
+                w = 1 / num_parts
+                distrib.add_particle(part, w)
+
             birth_terms.append((distrib, p))
 
         filt = filters.ParticleFilter()
@@ -452,4 +454,91 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         # print(glmb.cardinality)
         # print("labels")
         # print(glmb.labels)
+        assert glmb.cardinality == 1, "Cardinality does not match"
+
+    def test_UPF(self):
+        num_parts = 500
+        alpha = 1
+        kappa = 0
+
+        means = [np.array([-1500., 0., 250., 0., 0.]).reshape((5, 1)),
+                 np.array([-250., 0., 1000., 0., 0.]).reshape((5, 1)),
+                 np.array([250., 0., 750., 0., 0.]).reshape((5, 1)),
+                 np.array([1000., 0., 1500., 0., 0.]).reshape((5, 1))]
+        cov = np.diag(np.array([25, 10, 25, 10, 6 * (np.pi / 180)]))**2
+        b_probs = [0.02, 0.02, 0.02, 0.03]
+        birth_terms = []
+        sigPointRef = distributions.SigmaPoints(alpha=alpha, kappa=kappa,
+                                                n=means[0].size)
+        sigPointRef.init_weights()
+        for (m, p) in zip(means, b_probs):
+            distrib = distributions.ParticleDistribution()
+            spread = 2 * np.sqrt(np.diag(cov)).reshape(m.shape)
+            l_bnd = m - spread / 2
+            for ii in range(0, num_parts):
+                part = distributions.Particle()
+                part.point = l_bnd + spread * self.rng.random(m.shape)
+                # part.point = self.rng.multivariate_normal(m.flatten(),
+                #                                           cov).reshape(m.shape)
+                part.uncertainty = cov.copy()
+                part.sigmaPoints = deepcopy(sigPointRef)
+                part.sigmaPoints.update_points(m.copy(), cov)
+                w = 1 / num_parts
+                distrib.add_particle(part, w)
+
+            birth_terms.append((distrib, p))
+
+        filt = filters.UnscentedParticleFilter()
+        filt.set_meas_model(self.meas_mod)
+        filt.dyn_fnc = self.dyn_fnc
+        filt.meas_noise = np.diag([self.std_turn**2, self.std_pos**2])
+        filt.set_proc_noise(mat=self.G @ self.Q @ self.G.T)
+        filt.meas_likelihood_fnc = self.meas_likelihood
+        filt.proposal_sampling_fnc = self.proposal_sampling_fnc
+        filt.proposal_fnc = self.proposal_fnc
+
+        glmb = tracker.SMCGeneralizedLabeledMultiBernoulli()
+        glmb.filter = filt
+        self.init_glmb(glmb, birth_terms)
+
+        true_states = []
+        total_true = []
+        for k in range(0, self.max_time):
+            true_states = self.prop_states(k, true_states, noise_on=True)
+            total_true.append(deepcopy(true_states))
+
+            # generate measurements
+            meas = self.gen_meas(true_states, glmb.clutter_rate)
+
+            # run filter
+            glmb.predict(time_step=k)
+            glmb.correct(meas=meas)
+            glmb.prune()
+            glmb.cap()
+            glmb.extract_states()
+
+        print("Cardinality:")
+        print(glmb.cardinality)
+        print("labels")
+        print(glmb.labels)
+
+        # f_hndl = glmb.plot_states_labels([0, 2], true_states=total_true,
+        #                                  sig_bnd=None)
+
+        # meas_plt_x = []
+        # meas_plt_y = []
+        # for tt in glmb._meas_tab:
+        #     for m in tt:
+        #         theta = m[0]
+        #         r = m[1]
+        #         x = r * np.cos(theta)
+        #         y = r * np.sin(theta)
+        #         meas_plt_x.append(x)
+        #         meas_plt_y.append(y)
+
+        # color = (128/255, 128/255, 128/255)
+        # f_hndl.axes[0].scatter(meas_plt_x, meas_plt_y, zorder=-1, alpha=0.35,
+        #                        color=color, marker='^')
+
+        # glmb.plot_card_dist()
         assert glmb.cardinality == 1, "Cardinality does not match"

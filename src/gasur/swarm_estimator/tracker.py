@@ -1936,7 +1936,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     continue
                 if lbl in lbls:
                     ii = lbls.index(lbl)
-                    x[:, [tt]] = s_lst[tt][ii].copy()
+                    if s_lst[tt][ii] is not None:
+                        x[:, [tt]] = s_lst[tt][ii].copy()
 
                     if show_sig:
                         sig = np.zeros((2, 2))
@@ -2232,7 +2233,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                   predicted probability density
         """
         newTab = super().predict_track_tab_entry(tab, **kwargs)
-        newTab.prob_parts = deepcopy(self.filter._prop_parts)
+        newTab.prop_parts = deepcopy(self.filter._prop_parts)
         return newTab
 
     def predict_prob_density(self, probDensity, **kwargs):
@@ -2249,18 +2250,18 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 probability distribution.
 
         """
-        self.filter._particleDist = deepcopy(probDensity)
-        cls_type = type(probDensity)
-        newProbDen = cls_type()
+        self.filter.init_from_dist(deepcopy(probDensity))
+        # cls_type = type(probDensity)
+        # newProbDen = cls_type()
 
         self.filter.predict(**kwargs)
 
-        newProbDen.weights = [w * self.prob_survive
-                              for w in probDensity.weights]
-        tot = sum(newProbDen.weights)
-        newProbDen.weights = [w / tot for w in newProbDen.weights]
+        newProbDen = self.filter.extract_dist()
 
-        newProbDen.particles = deepcopy(self.filter._particleDist.particles)
+        new_weights = [w * self.prob_survive for p, w in probDensity]
+        tot = sum(new_weights)
+        w_lst = [w / tot for w in new_weights]
+        newProbDen.update_weights(w_lst)
 
         return newProbDen
 
@@ -2299,6 +2300,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             prop_parts = deepcopy(tab.prop_parts)
         self.filter._prop_parts = prop_parts
         newTab, cost = super().correct_track_tab_entry(meas, tab, **kwargs)
+        newTab.prop_parts = self.filter._prop_parts
         return newTab, cost
 
     def correct_prob_density(self, meas, probDensity, **kwargs):
@@ -2318,20 +2320,22 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 and resampledprobability distribution.
                 - (float): Sum of the unnormalized weights
         """
-        self.filter._particleDist = deepcopy(probDensity)
-        cls_type = type(probDensity)
-        newProbDen = cls_type()
+        self.filter.init_from_dist(deepcopy(probDensity))
+        # cls_type = type(probDensity)
+        # newProbDen = cls_type()
 
         likelihood, inds_removed = self.filter.correct(meas, **kwargs)[1:3]
+        newProbDen = self.filter.extract_dist()
 
-        newProbDen.weights = self.prob_detection * np.array(likelihood)
-        tot = sum(newProbDen.weights)
-        if tot > 0:
-            newProbDen.weights = [w / tot for w in newProbDen.weights]
+        new_weights = self.prob_detection * np.array(likelihood)
+        tot = sum(new_weights)
+        if tot > 0 and np.abs(tot) != np.inf:
+            new_weights = [w / tot for w in new_weights]
         else:
+            new_weights = [np.inf] * len(new_weights)
             tot = np.inf  # division by 0 would give inf
 
-        newProbDen.particles = deepcopy(self.filter._particleDist.particles)
+        newProbDen.update_weights(new_weights)
 
         return newProbDen, tot
 
@@ -2373,9 +2377,11 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                    if a in self._lab_mem]
         new_ii = [labels.index(a) for a in either if a in labels]
 
-        self._lab_mem = [labels[ii] for ii in surv_ii] \
+        self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
+            + [labels[ii] for ii in surv_ii] \
             + [labels[ii] for ii in new_ii]
-        self._meas_asoc_mem = [meas_hists[ii] for ii in surv_ii] \
+        self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
+            + [meas_hists[ii] for ii in surv_ii] \
             + [meas_hists[ii] for ii in new_ii]
 
         self._states = [None] * len(self._meas_tab)
@@ -2401,8 +2407,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 tt = b_time + t_after_b
                 if emm is not None:
                     meas = self._meas_tab[tt][emm].copy()
-                    pd = self.correct_prob_density(meas, pd,
-                                                   **kwargs)[0]
+                    pd = self.correct_prob_density(meas, pd, **kwargs)[0]
 
                 # find best one and add to state table
                 new_state = pd.mean
