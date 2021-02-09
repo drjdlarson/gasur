@@ -542,3 +542,66 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
 
         # glmb.plot_card_dist()
         assert glmb.cardinality == 1, "Cardinality does not match"
+
+    def test_UPFMCMC(self):
+        num_parts = 300
+        alpha = 1
+        kappa = 0
+
+        means = [np.array([-1500., 0., 250., 0., 0.]).reshape((5, 1)),
+                 np.array([-250., 0., 1000., 0., 0.]).reshape((5, 1)),
+                 np.array([250., 0., 750., 0., 0.]).reshape((5, 1)),
+                 np.array([1000., 0., 1500., 0., 0.]).reshape((5, 1))]
+        cov = np.diag(np.array([25, 10, 25, 10, 6 * (np.pi / 180)]))**2
+        b_probs = [0.02, 0.02, 0.02, 0.03]
+        birth_terms = []
+        sigPointRef = distributions.SigmaPoints(alpha=alpha, kappa=kappa,
+                                                n=means[0].size)
+        sigPointRef.init_weights()
+        for (m, p) in zip(means, b_probs):
+            distrib = distributions.ParticleDistribution()
+            spread = 2 * np.sqrt(np.diag(cov)).reshape(m.shape)
+            l_bnd = m - spread / 2
+            for ii in range(0, num_parts):
+                part = distributions.Particle()
+                part.point = l_bnd + spread * self.rng.random(m.shape)
+                part.uncertainty = cov.copy()
+                part.sigmaPoints = deepcopy(sigPointRef)
+                part.sigmaPoints.update_points(m.copy(), cov)
+                w = 1 / num_parts
+                distrib.add_particle(part, w)
+
+            birth_terms.append((distrib, p))
+
+        filt = filters.UnscentedParticleFilter()
+        filt.use_MCMC = True
+        filt.set_meas_model(self.meas_mod)
+        filt.dyn_fnc = self.dyn_fnc
+        filt.meas_noise = np.diag([self.std_turn**2, self.std_pos**2])
+        filt.set_proc_noise(mat=self.G @ self.Q @ self.G.T)
+        filt.meas_likelihood_fnc = self.meas_likelihood
+        filt.proposal_sampling_fnc = self.proposal_sampling_fnc
+        filt.proposal_fnc = self.proposal_fnc
+
+        glmb = tracker.SMCGeneralizedLabeledMultiBernoulli()
+        glmb.filter = filt
+        self.init_glmb(glmb, birth_terms)
+
+        true_states = []
+        total_true = []
+        for k in range(0, self.max_time):
+            print(k)
+            true_states = self.prop_states(k, true_states, noise_on=True)
+            total_true.append(deepcopy(true_states))
+
+            # generate measurements
+            meas = self.gen_meas(true_states, glmb.clutter_rate)
+
+            # run filter
+            glmb.predict(time_step=k)
+            glmb.correct(meas=meas)
+            glmb.prune()
+            glmb.cap()
+            glmb.extract_states()
+
+        assert glmb.cardinality == 1, "Cardinality does not match"
