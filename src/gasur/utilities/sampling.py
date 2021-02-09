@@ -22,7 +22,7 @@ def gibbs(in_costs, m):
         for var in range(0, cost_size[0]):
             temp_samp = np.exp(-in_costs[var, ])
             temp_samp_ind = np.concatenate(np.arange((1, var-1)),
-                                           np.arange((var+1, len(curr_soln))))
+                                           np.arange((var+1, len(1))))
             temp_samp[temp_samp_ind] = 0
             old_ind_temp = temp_samp > 0
             old_ind = np.array([])
@@ -37,7 +37,7 @@ def gibbs(in_costs, m):
         assignments[sol, ] = cur_soln
         sub_ind = np.ravel_multi_index((np.arange(0, cost_size[0]), cur_soln),
                                        dims=cost_size)
-        costs(sol) = sum(in_costs[sub_ind])
+        costs[sol] = sum(in_costs[sub_ind])
 
     [C, I] = np.unique(assignments)  #  may need to use axis = 1 or axis = 0
     assignments = C
