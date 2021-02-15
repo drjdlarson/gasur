@@ -1356,16 +1356,17 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         # Calculation for average survival/death probabilities
         (avg_prob_survive,
-         avg_prob_death) = self._calc_avg_prob_surv_death(**kwargs)
+         avg_prob_death) = self._calc_avg_prob_surv_death()
 
         # loop over postierior components
         surv_hyps = self._gen_surv_hyps(avg_prob_survive, avg_prob_death)
+
+        self._card_dist = self.calc_card_dist(surv_hyps)
 
         # Get  predicted hypothesis by convolution
         self._track_tab = birth_tab + surv_tab
         self._set_pred_hyps(birth_tab, birth_hyps, surv_hyps)
 
-        self._card_dist = self.calc_card_dist(self._hypotheses)
         self._clean_predictions()
 
     def predict_track_tab_entry(self, tab, **kwargs):
@@ -1470,8 +1471,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     ratio = ratio.reshape((ratio.size, 1))
                     ratio = np.tile(ratio, (1, num_meas))
 
-                    cost_m = ratio * all_cost_m[p_hyp.track_set, :] \
-                        / clutter
+                    cost_m = np.zeros(all_cost_m[p_hyp.track_set, :].shape)
+                    for ii, ts in enumerate(p_hyp.track_set):
+                        cost_m[ii, :] = ratio[ii] * all_cost_m[ts, :] / clutter
+
                     if (np.abs(cost_m) == np.inf).any():
                         continue
 
@@ -1490,6 +1493,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                             + np.log(p_hyp.assoc_prob) - c
                         lst1 = [num_pred * x for x in a]
                         lst2 = p_hyp.track_set.copy()
+                        if len(lst1) != len(lst2):
+                            raise RuntimeWarning('Lists not the same length')
                         new_hyp.track_set = [sum(x) for x in zip(lst1, lst2)]
                         up_hyps.append(new_hyp)
 
@@ -1822,8 +1827,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             if len(hyp.track_set) == 0:
                 lst = []
             else:
-                hyp.track_set.sort()
-                lst = [int(x) for x in hyp.track_set]
+                sorted_inds = hyp.track_set.copy()
+                sorted_inds.sort()
+                lst = [int(x) for x in sorted_inds]
             h = hash('*'.join(map(str, lst)))
             hash_lst.append(h)
 
@@ -1922,12 +1928,14 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 if lbl not in u_lbls:
                     u_lbls.append(lbl)
 
+        cmap = pltUtil.get_cmap(len(u_lbls))
+
         # get array of all state values for each label
         added_sig_lbl = False
         added_true_lbl = False
         added_state_lbl = False
         added_meas_lbl = False
-        for lbl in u_lbls:
+        for c_idx, lbl in enumerate(u_lbls):
             x = np.nan * np.ones((x_dim, len(s_lst)))
             if show_sig:
                 sigs = [None] * len(s_lst)
@@ -1952,15 +1960,17 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         sigs[tt] = sig
 
             # plot
-            r = rng.random()
-            b = rng.random()
-            g = rng.random()
-            color = (r, g, b)
+            color = cmap(c_idx)
+
             if show_sig:
                 for tt, sig in enumerate(sigs):
                     if sig is None:
                         continue
-                    w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
+                    try:
+                        w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
+                    except Exception:
+                        brk = 1
+                        raise
                     if not added_sig_lbl:
                         s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
                         e = Ellipse(xy=x[plt_inds, tt], width=w,
@@ -1977,12 +1987,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
             if not added_state_lbl:
                 f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                       color=color, edgecolors=(0, 0, 0),
+                                       color=color, edgecolors='k',
                                        label='States')
                 added_state_lbl = True
             else:
                 f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                       color=color, edgecolors=(0, 0, 0))
+                                       color=color, edgecolors='k')
 
             s = "({}, {})".format(lbl[0], lbl[1])
             tmp = x.copy()
@@ -2258,9 +2268,13 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         newProbDen = self.filter.extract_dist()
 
-        new_weights = [w * self.prob_survive for p, w in probDensity]
+        ps = self.compute_prob_survive(probDensity.particles, **kwargs)
+        new_weights = [w * ps[ii] for ii, (p, w) in enumerate(probDensity)]
         tot = sum(new_weights)
-        w_lst = [w / tot for w in new_weights]
+        if np.abs(tot) == np.inf:
+            w_lst = [np.inf] * len(new_weights)
+        else:
+            w_lst = [w / tot for w in new_weights]
         newProbDen.update_weights(w_lst)
 
         return newProbDen
@@ -2324,10 +2338,15 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         # cls_type = type(probDensity)
         # newProbDen = cls_type()
 
-        likelihood, inds_removed = self.filter.correct(meas, **kwargs)[1:3]
+        likelihood, inds_removed = self.filter.correct(meas, selection=False,
+                                                       **kwargs)[1:3]
         newProbDen = self.filter.extract_dist()
 
-        new_weights = self.prob_detection * np.array(likelihood)
+        # new_weights = self.prob_detection * np.array(likelihood)
+        pd = self.compute_prob_detection(probDensity.particles, **kwargs)
+        new_weights = (np.array(pd) * np.array(likelihood)
+                       * np.array(newProbDen.weights))
+        # new_weights = self.prob_detection * np.array(newProbDen.weights)
         tot = sum(new_weights)
         if tot > 0 and np.abs(tot) != np.inf:
             new_weights = [w / tot for w in new_weights]
@@ -2336,6 +2355,8 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             tot = np.inf  # division by 0 would give inf
 
         newProbDen.update_weights(new_weights)
+        self.filter.init_from_dist(newProbDen)
+        self.filter._selection(**kwargs)
 
         return newProbDen, tot
 
@@ -2370,6 +2391,8 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             meas_hists.append(self._track_tab[ptr].meas_assoc_hist.copy())
             labels.append(self._track_tab[ptr].label)
 
+        print(labels)
+
         both = set(self._lab_mem).intersection(labels)
         surv_ii = [labels.index(x) for x in both]
         either = set(self._lab_mem).symmetric_difference(labels)
@@ -2402,12 +2425,18 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             for (t_after_b, emm) in enumerate(hist):
                 # propagate for GM
                 pd = self.predict_prob_density(pd, **kwargs)
+                # self.filter.plot_particles([0, 2], title='predict')
 
                 # measurement correction for GM
                 tt = b_time + t_after_b
                 if emm is not None:
                     meas = self._meas_tab[tt][emm].copy()
+                    # self.filter.plot_weighted_particles(0)
+                    # self.filter.plot_weighted_particles(2)
                     pd = self.correct_prob_density(meas, pd, **kwargs)[0]
+                    # self.filter.plot_particles([0, 2], title='correct')
+                    # self.filter.plot_weighted_particles(0)
+                    # self.filter.plot_weighted_particles(2)
 
                 # find best one and add to state table
                 new_state = pd.mean
