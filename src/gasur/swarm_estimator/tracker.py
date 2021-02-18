@@ -2335,18 +2335,17 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 - (float): Sum of the unnormalized weights
         """
         self.filter.init_from_dist(deepcopy(probDensity))
-        # cls_type = type(probDensity)
-        # newProbDen = cls_type()
 
         likelihood, inds_removed = self.filter.correct(meas, selection=False,
                                                        **kwargs)[1:3]
         newProbDen = self.filter.extract_dist()
 
-        # new_weights = self.prob_detection * np.array(likelihood)
         pd = self.compute_prob_detection(probDensity.particles, **kwargs)
-        new_weights = (np.array(pd) * np.array(likelihood)
-                       * np.array(newProbDen.weights))
-        # new_weights = self.prob_detection * np.array(newProbDen.weights)
+        if all(np.abs(newProbDen.weights) == np.inf):
+            new_weights = np.inf * np.ones(len(newProbDen.weights))
+        else:
+            new_weights = (np.array(pd) * np.array(likelihood)
+                           * np.array(newProbDen.weights))
         tot = sum(new_weights)
         if tot > 0 and np.abs(tot) != np.inf:
             new_weights = [w / tot for w in new_weights]
@@ -2357,6 +2356,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         newProbDen.update_weights(new_weights)
         self.filter.init_from_dist(newProbDen)
         self.filter._selection(**kwargs)
+        newProbDen = self.filter.extract_dist()
 
         return newProbDen, tot
 
