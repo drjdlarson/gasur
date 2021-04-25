@@ -459,7 +459,7 @@ def a_star_search(maze, start, end, cost=1):
     # Adding a stop condition. This is to avoid any infinite loop and stop
     # execution after some reasonable number of steps
     outer_iterations = 0
-    max_iterations = (len(maze) // 2) ** 10
+    max_iterations = 100000
 
     # what squares do we search . search movement is left-right-top-bottom
     # (4 movements) from every positon
@@ -562,9 +562,13 @@ def a_star_search(maze, start, end, cost=1):
             # Create the f, g, and h values
             child.g = current_node.g + cost
 
-            ## Heuristic costs calculated here, this is using eucledian distance
-            child.h = (((child.position[0] - end_node.position[0]) ** 2) +
-                       ((child.position[1] - end_node.position[1]) ** 2))
+            # Heuristic costs calculated here, this is using euclidian distance
+            child.h = np.sqrt((((child.position[0] - end_node.position[0]) ** 2) +
+                        ((child.position[1] - end_node.position[1]) ** 2)))
+            
+            # dx = abs(child.position[0] - end_node.position[0])  # diagonal heuristic
+            # dy = abs(child.position[1] - end_node.position[1])
+            # child.h = dx + dy - 1 + min(dx, dy)
 
             child.f = child.g + child.h
 
