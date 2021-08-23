@@ -1305,7 +1305,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         return surv_hyps
 
-    def _calc_avg_prob_surv_death(self):
+    def _calc_avg_prob_surv_death(self, **kwargs):
         avg_prob_survive = self.prob_survive * np.ones(len(self._track_tab))
         avg_prob_death = 1 - avg_prob_survive
 
