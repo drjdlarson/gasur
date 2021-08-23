@@ -232,6 +232,7 @@ def test_STMGeneralizedLabeledMultiBernoulli():
     assert glmb.cardinality == 4, "Cardinality does not match"
 
 
+# @pytest.mark.incremental
 class TestSMCGeneralizedLabeledMultiBernoulli:
     def __init__(self, **kwargs):
         self.rng = rnd.default_rng(1)
@@ -250,13 +251,12 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         self.prob_detection = 0.98
         self.prob_survive = 0.99
 
-        self.G = np.array([[self.sig_w * self.dt**2 / 2, 0, 0],
-                          [self.sig_w * self.dt, 0, 0],
-                          [0, self.sig_w * self.dt**2 / 2, 0],
-                          [0, self.sig_w * self.dt, 0],
-                          [0, 0, self.sig_u]])
-        self.Q = np.eye(3)
-        self.proc_std = nla.cholesky(self.Q)
+        self.G = np.array([[self.dt**2 / 2, 0, 0],
+                          [self.dt, 0, 0],
+                          [0, self.dt**2 / 2, 0],
+                          [0, self.dt, 0],
+                          [0, 0, 1]])
+        self.Q = np.diag([self.sig_w, self.sig_w, self.sig_u])**2
 
     def compute_prob_detection(self, part_lst, **kwargs):
         if len(part_lst) == 0:
@@ -321,8 +321,9 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         ctrl = np.zeros((2, 1))
         ns = rk4(self.cont_dyn, x.copy(), self.dt, cur_input=ctrl)
         if noise_on:
-            dim = self.proc_std.shape[0]
-            samp = self.proc_std @ self.rng.standard_normal((dim, 1))
+            dim = self.Q.shape[0]
+            samp = self.rng.multivariate_normal(np.zeros(dim),
+                                                self.Q).reshape((dim, 1))
             ns += self.G @ samp
         return ns
 
@@ -355,10 +356,9 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
     def gen_meas(self, true_states, clutter_rate):
         meas = []
         for s in true_states:
-            # if self.rng.random() <= self.compute_prob_detection([s]):
             m = self.meas_mod(s)
-            m += np.array([[self.std_turn], [self.std_pos]]) \
-                * self.rng.standard_normal(size=m.shape)
+            cov = np.diag([self.std_turn, self.std_pos])**2
+            m = self.rng.multivariate_normal(m.flatten(), cov).reshape(m.shape)
             meas.append(m)
 
         num_clutt = self.rng.poisson(clutter_rate)
@@ -394,10 +394,11 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         birth_terms = []
         for (m, p) in zip(means, b_probs):
             distrib = distributions.ParticleDistribution()
+            spread = 2 * np.sqrt(np.diag(cov)).reshape(m.shape)
+            l_bnd = m - spread / 2
             for ii in range(0, num_parts):
                 part = distributions.Particle()
-                part.point = self.rng.multivariate_normal(m.flatten(),
-                                                          cov).reshape(m.shape)
+                part.point = l_bnd + spread * self.rng.random(m.shape)
                 w = 1 / num_parts
                 distrib.add_particle(part, w)
 
@@ -432,28 +433,6 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
             glmb.cap()
             glmb.extract_states()
 
-        # f_hndl = glmb.plot_states_labels([0, 2], true_states=total_true,
-        #                                  sig_bnd=None)
-
-        # meas_plt_x = []
-        # meas_plt_y = []
-        # for tt in glmb._meas_tab:
-        #     for m in tt:
-        #         theta = m[0]
-        #         r = m[1]
-        #         x = r * np.cos(theta)
-        #         y = r * np.sin(theta)
-        #         meas_plt_x.append(x)
-        #         meas_plt_y.append(y)
-
-        # color = (128/255, 128/255, 128/255)
-        # f_hndl.axes[0].scatter(meas_plt_x, meas_plt_y, zorder=-1, alpha=0.35,
-        #                        color=color, marker='^')
-
-        # print("Cardinality:")
-        # print(glmb.cardinality)
-        # print("labels")
-        # print(glmb.labels)
         assert glmb.cardinality == 1, "Cardinality does not match"
 
     def test_UPF(self):
@@ -478,8 +457,6 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
             for ii in range(0, num_parts):
                 part = distributions.Particle()
                 part.point = l_bnd + spread * self.rng.random(m.shape)
-                # part.point = self.rng.multivariate_normal(m.flatten(),
-                #                                           cov).reshape(m.shape)
                 part.uncertainty = cov.copy()
                 part.sigmaPoints = deepcopy(sigPointRef)
                 part.sigmaPoints.update_points(m.copy(), cov)
@@ -517,34 +494,10 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
             glmb.cap()
             glmb.extract_states()
 
-        print("Cardinality:")
-        print(glmb.cardinality)
-        print("labels")
-        print(glmb.labels)
-
-        # f_hndl = glmb.plot_states_labels([0, 2], true_states=total_true,
-        #                                  sig_bnd=None)
-
-        # meas_plt_x = []
-        # meas_plt_y = []
-        # for tt in glmb._meas_tab:
-        #     for m in tt:
-        #         theta = m[0]
-        #         r = m[1]
-        #         x = r * np.cos(theta)
-        #         y = r * np.sin(theta)
-        #         meas_plt_x.append(x)
-        #         meas_plt_y.append(y)
-
-        # color = (128/255, 128/255, 128/255)
-        # f_hndl.axes[0].scatter(meas_plt_x, meas_plt_y, zorder=-1, alpha=0.35,
-        #                        color=color, marker='^')
-
-        # glmb.plot_card_dist()
         assert glmb.cardinality == 1, "Cardinality does not match"
 
     def test_UPFMCMC(self):
-        num_parts = 300
+        num_parts = 100
         alpha = 1
         kappa = 0
 
@@ -552,7 +505,7 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
                  np.array([-250., 0., 1000., 0., 0.]).reshape((5, 1)),
                  np.array([250., 0., 750., 0., 0.]).reshape((5, 1)),
                  np.array([1000., 0., 1500., 0., 0.]).reshape((5, 1))]
-        cov = np.diag(np.array([25, 10, 25, 10, 6 * (np.pi / 180)]))**2
+        cov = np.diag(np.array([10, 5, 10, 5, 3 * (np.pi / 180)]))**2
         b_probs = [0.02, 0.02, 0.02, 0.03]
         birth_terms = []
         sigPointRef = distributions.SigmaPoints(alpha=alpha, kappa=kappa,
@@ -590,7 +543,6 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
         true_states = []
         total_true = []
         for k in range(0, self.max_time):
-            print(k)
             true_states = self.prop_states(k, true_states, noise_on=True)
             total_true.append(deepcopy(true_states))
 
@@ -603,5 +555,30 @@ class TestSMCGeneralizedLabeledMultiBernoulli:
             glmb.prune()
             glmb.cap()
             glmb.extract_states()
+
+        # print("Cardinality:")
+        # print(glmb.cardinality)
+        # print("labels")
+        # print(glmb.labels)
+
+        # f_hndl = glmb.plot_states_labels([0, 2], true_states=total_true,
+        #                                  sig_bnd=None)
+
+        # meas_plt_x = []
+        # meas_plt_y = []
+        # for tt in glmb._meas_tab:
+        #     for m in tt:
+        #         theta = m[0]
+        #         r = m[1]
+        #         x = r * np.cos(theta)
+        #         y = r * np.sin(theta)
+        #         meas_plt_x.append(x)
+        #         meas_plt_y.append(y)
+
+        # color = (128/255, 128/255, 128/255)
+        # f_hndl.axes[0].scatter(meas_plt_x, meas_plt_y, zorder=-1, alpha=0.35,
+        #                        color=color, marker='^')
+
+        # glmb.plot_card_dist()
 
         assert glmb.cardinality == 1, "Cardinality does not match"
