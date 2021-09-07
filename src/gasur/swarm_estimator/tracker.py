@@ -20,27 +20,36 @@ import gncpy.plotting as pltUtil
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
-    """ Generic base class for RFS based filters.
+    """Generic base class for RFS based filters.
 
-    Attributes:
-        filter (gncpy.filters.BayesFilter): Filter handling dynamics
-        prob_detection (float): Modeled probability an object is detected
-        prob_survive (float): Modeled probability of object survival
-        birth_terms (list): List of terms in the birth model
-        clutter_rate (float): Rate of clutter
-        clutter_density (float): Density of clutter distribution
-        inv_chi2_gate (float): Chi squared threshold for gating the
-            measurements
-        debug_plots (bool): Saves data needed for extra debugging plots
+    Attributes
+    ----------
+    filter : gncpy.filters.BayesFilter
+        Filter handling dynamics
+    prob_detection : float
+        Modeled probability an object is detected
+    prob_survive : float
+        Modeled probability of object survival
+    birth_terms : list
+        List of terms in the birth model
+    clutter_rate : float
+        Rate of clutter
+    clutter_density : float
+        Density of clutter distribution
+    inv_chi2_gate : float
+        Chi squared threshold for gating the measurements
+    debug_plots : bool
+        Saves data needed for extra debugging plots
     """
 
-    def __init__(self, **kwargs):
-        self.filter = None
-        self.prob_detection = 1
-        self.prob_survive = 1
-        self.birth_terms = []
-        self.clutter_rate = 0
-        self.clutter_den = 0
+    def __init__(self, in_filter=None, prob_detection=1, prob_survive=1,
+                 birth_terms=[], clutter_rate=0, clutter_den=0, **kwargs):
+        self.filter = deepcopy(in_filter)
+        self.prob_detection = prob_detection
+        self.prob_survive = prob_survive
+        self.birth_terms = deepcopy(birth_terms)
+        self.clutter_rate = clutter_rate
+        self.clutter_den = clutter_den
 
         self.inv_chi2_gate = 0
 
@@ -49,49 +58,63 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
     @property
     def prob_miss_detection(self):
-        """ Compliment of :py:attr:`gasur.swarm_estimator.RandomFiniteSetBase.prob_detection`
-        """
+        """Compliment of :py:attr:`.swarm_estimator.RandomFiniteSetBase.prob_detection`."""
         return 1 - self.prob_detection
 
     @property
     def prob_death(self):
-        """ Compliment of :py:attr:`gasur.swarm_estimator.RandomFinitSetBase.prob_survive`
-        """
+        """Compliment of :attr:`gasur.swarm_estimator.RandomFinitSetBase.prob_survive`."""
         return 1 - self.prob_survive
 
     @property
     def num_birth_terms(self):
-        """ Number of terms in the birth model
-        """
+        """Number of terms in the birth model."""
         return len(self.birth_terms)
 
     @abc.abstractmethod
     def predict(self, **kwargs):
+        """Abstract method for the prediction step."""
         pass
 
     @abc.abstractmethod
     def correct(self, **kwargs):
+        """Abstract method for the correction step."""
         pass
 
     @abc.abstractmethod
     def extract_states(self, **kwargs):
+        """Abstract method for extracting states."""
         pass
 
-    def _gate_meas(self, meas, means, covs, **kwargs):
-        """
-        This gates measurements assuming a kalman filter (Gaussian noise).
+    def _gate_meas(self, meas, means, covs, meas_mat_args={},
+                   est_meas_args={}):
+        """Gates measurements based on current estimates.
+
+        Notes
+        -----
+        Gating is performed based on a Gaussian noise model.
         See :cite:`Cox1993_AReviewofStatisticalDataAssociationTechniquesforMotionCorrespondence`
         for details on the chi squared test used.
 
-        Args:
-            meas (list): each element is a 2d numpy array
-            means (list): each element is a 2d numpy array
-            covs (list): each element is a 2d numpy array
-            **kwargs (kwargs): Passed to the filters measurement matrix and
-                estimated measurement functions.
+        Parameters
+        ----------
+        meas : list
+            2d numpy arrrays of each measurement.
+        means : list
+            2d numpy arrays of each mean.
+        covs : list
+            2d numpy array of each covariance.
+        meas_mat_args : dict, optional
+            keyword arguments to pass to the inner filters get measurement
+            matrix function. The default is {}.
+        est_meas_args : TYPE, optional
+            keyword arguments to pass to the inner filters get estimate
+            matrix function. The default is {}.
 
-        Returns:
-            list: Measurements passing gating criteria.
+        Returns
+        -------
+        list
+            2d numpy arrays of valid measurements.
 
         """
         if len(meas) == 0:
@@ -99,8 +122,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
         valid = []
         for (m, p) in zip(means, covs):
-            meas_mat = self.filter.get_meas_mat(m, **kwargs)
-            est = self.filter.get_est_meas(m, **kwargs)
+            meas_mat = self.filter.get_meas_mat(m, **meas_mat_args)
+            est = self.filter.get_est_meas(m, **est_meas_args)
             meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
             meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
             v_s = cholesky(meas_pred_cov.T)
@@ -119,29 +142,57 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
 
 class ProbabilityHypothesisDensity(RandomFiniteSetBase):
-    """ Probability Hypothesis Density Filter
+    """Implements the Probability Hypothesis Density filter.
 
+    The kwargs in the constructor are passed through to the parent constructor.
+
+    Notes
+    -----
+    The filter implementation is based on :cite:`Vo2006_TheGaussianMixtureProbabilityHypothesisDensityFilter`
+
+    Attributes
+    ----------
+    gating_on : bool
+        flag indicating if measurement gating should be performed. The
+        default is False.
+    inv_chi2_gate : float
+        threshold for the chi squared test in the measurement gating. The
+        default is 0.
+    extract_threshold : float
+        threshold for extracting the state. The default is 0.5.
+    prune_threshold : float
+        threshold for removing hypotheses. The default is 1*10**-5.
+    merge_threshold : float
+        threshold for merging hypotheses. The default is 4.
+    save_covs : bool
+        flag indicating if covariances should be saved. The default is
+        False.
+    max_gauss : int
+        max number of gaussians to use. The default is 100.
 
     """
 
-    def __init__(self, **kwargs):
-        self.gating_on = False
-        self.inv_chi2_gate = 0
-        self.extract_threshold = 0.5
-        self.prune_threshold = 1*10**(-5)
-        self.merge_threshold = 4
-        self.save_covs = False
-        self.max_gauss = 100
+    def __init__(self, gating_on=False, inv_chi2_gate=0, extract_threshold=0.5,
+                 prune_threshold=1 * 10**-5, merge_threshold=4, save_covs=False,
+                 max_gauss=100, **kwargs):
+        self.gating_on = gating_on
+        self.inv_chi2_gate = inv_chi2_gate
+        self.extract_threshold = extract_threshold
+        self.prune_threshold = prune_threshold
+        self.merge_threshold = merge_threshold
+        self.save_covs = save_covs
+        self.max_gauss = max_gauss
 
         self._gaussMix = GaussianMixture()
         self._states = []  # local copy for internal modification
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._covs = []  # local copy for internal modification
+
         super().__init__(**kwargs)
 
     @property
     def states(self):
-        """ Read only list of extracted states.
+        """Read only list of extracted states.
 
         This is a list with 1 element per timestep, and each element is a list
         of the best states extracted at that timestep. The order of each
@@ -154,15 +205,17 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
     @property
     def covariances(self):
-        """ Read only list of extracted covariances.
+        """Read only list of extracted covariances.
 
         This is a list with 1 element per timestep, and each element is a list
         of the best covariances extracted at that timestep. The order of each
         element corresponds to the state order.
 
-        Raises:
-            RuntimeWarning: If the class is not saving the covariances, and
-                returns an empty list
+        Warns
+        -----
+            RuntimeWarning
+                If the class is not saving the covariances, and returns an
+                empty list
         """
         if not self.save_covs:
             raise RuntimeWarning("Not saving covariances")
@@ -174,83 +227,119 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
     @property
     def cardinality(self):
-        if len(self._states) ==  0:
+        """Read only cardinality of the RFS."""
+        if len(self._states) == 0:
             return 0
         else:
             return len(self._states[-1])
 
-    def predict(self, **kwargs):
-        """ Prediction step of the PHD filter.
+    def predict(self, timestep, filt_args={}):
+        """Prediction step of the PHD filter.
 
         This predicts new hypothesis, and propogates them to the next time
         step. It also updates the cardinality distribution. Because this calls
         the inner filter's predict function, the keyword arguments must contain
         any information needed by that function.
 
-        Keyword Args:
+
+        Parameters
+        ----------
+        timestep: float
+            current timestep
+        filt_args : dict, optional
+            Passed to the inner filter. The default is {}.
+
+        Returns
+        -------
+        None.
 
         """
-        self._gaussMix = self.predict_prob_density(probDensity=self._gaussMix,
-                                                   **kwargs)
+        self._gaussMix = self._predict_prob_density(timestep, self._gaussMix,
+                                                    filt_args)
 
         for gm in self.birth_terms:
             self._gaussMix.weights.extend(gm.weights)
             self._gaussMix.means.extend(gm.means)
             self._gaussMix.covariances.extend(gm.covariances)
 
-    def predict_prob_density(self, **kwargs):
-        """ Loops over all elements in a probability distribution and performs
+    def _predict_prob_density(self, timestep, probDensity, filt_args):
+        """Predicts the probability density.
+
+        Loops over all elements in a probability distribution and performs
         the filter prediction.
 
-        Keyword Args:
-            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`):
-                A probability density to run prediction on
+        Parameters
+        ----------
+        timestep: float
+            current timestep
+        probDensity : :class:`gasur.utilities.distributions.GaussianMixture`
+            Probability density to perform prediction on.
+        filt_args : dict
+            Passed directly to the inner filter.
 
-        Returns:
-            gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
-                predicted probability density
+        Returns
+        -------
+        gm : :class:`gasur.utilities.distributions.GaussianMixture`
+            predicted Gaussian mixture.
+
         """
-        probDensity = kwargs['probDensity']
         gm_tup = zip(probDensity.means,
                      probDensity.covariances)
-        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
         gm = GaussianMixture()
-        gm.weights = [self.prob_survive*x for x in probDensity.weights.copy()]
+        gm.weights = [self.prob_survive * x for x in probDensity.weights.copy()]
         for ii, (m, P) in enumerate(gm_tup):
             self.filter.cov = P
-            n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
-                                         **kwargs)
+            n_mean = self.filter.predict(timestep, m, **filt_args)
             gm.covariances.append(self.filter.cov.copy())
             gm.means.append(n_mean)
 
         return gm
 
-    def correct(self, **kwargs):
-        """ Correction step of the PHD filter.
+    def correct(self, timestep, meas_in, meas_mat_args={}, est_meas_args={},
+                filt_args={}):
+        """Correction step of the PHD filter.
 
         This corrects the hypotheses based on the measurements and gates the
         measurements according to the class settings. It also updates the
-        cardinality distribution. Because this calls the inner filter's correct
-        function, the keyword arguments must contain any information needed by
-        that function.
+        cardinality distribution.
 
-        Keyword Args:
-            meas (list): List of Nm x 1 numpy arrays that contain all the
-                measurements needed for this correction
+
+        Parameters
+        ----------
+        timestep: float
+            current timestep
+        meas_in : list
+            2d numpy arrays representing a measurement.
+        meas_mat_args : dict, optional
+            keyword arguments to pass to the inner filters get measurement
+            matrix function. Only used if gating is on. The default is {}.
+        est_meas_args : TYPE, optional
+            keyword arguments to pass to the inner filters estimate
+            measurements function. Only used if gating is on. The default is {}.
+        filt_args : dict, optional
+            keyword arguments to pass to the inner filters correct function.
+            The default is {}.
+
+        .. todo::
+            Fix the measurement gating
+
+        Returns
+        -------
+        None.
+
         """
-        meas = deepcopy(kwargs['meas'])
-        del kwargs['meas']
+        meas = deepcopy(meas_in)
 
         if self.gating_on:
             meas = self._gate_meas(meas, self._gaussMix.means,
-                                   self._gaussMix.covariances, **kwargs)
+                                   self._gaussMix.covariances, meas_mat_args,
+                                   est_meas_args)
 
         self._meas_tab.append(meas)
 
         gmix = deepcopy(self._gaussMix)
-        gmix.weights = [self.prob_miss_detection*x for x in gmix.weights]
-        gm = self.correct_prob_density(meas=meas, probDensity=self._gaussMix,
-                                       **kwargs)
+        gmix.weights = [self.prob_miss_detection * x for x in gmix.weights]
+        gm = self._correct_prob_density(timestep, meas, self._gaussMix, filt_args)
 
         gm.weights.extend(gmix.weights)
         self._gaussMix.weights = gm.weights.copy()
@@ -259,23 +348,27 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         gm.covariances.extend(gmix.covariances)
         self._gaussMix.covariances = gm.covariances.copy()
 
-    def correct_prob_density(self, meas, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
+    def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
+        """Corrects the probability densities.
+
+        Loops over all elements in a probability distribution and preforms
         the filter correction.
 
-        Keyword Args:
-            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
-                probability density to run correction on
-            meas (list): List of measurements, each is a N x 1 numpy array
+        Parameters
+        ----------
+        meas : list
+            2d numpy arrays of each measurement.
+        probDensity : :py:class:`gasur.utilities.distributions.GaussianMixture`
+            probability density to run correction on.
+        filt_args : dict
+            arguements to pass to the inner filter correct function.
 
-        Returns:
-            tuple containing
+        Returns
+        -------
+        gm : :py:class:`gasur.utilities.distributions.GaussianMixture`
+            corrected probability density.
 
-                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
-                  corrected probability density
-                - cost (float): Total cost of for the m best assignment
         """
-        probDensity = kwargs['probDensity']
         gm = GaussianMixture()
         det_weights = [self.prob_detection * x for x in probDensity.weights]
         for z in meas:
@@ -283,8 +376,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             for jj in range(0, len(probDensity.means)):
                 self.filter.cov = probDensity.covariances[jj]
                 state = probDensity.means[jj]
-                (mean, qz) = self.filter.correct(meas=z, cur_state=state,
-                                                 **kwargs)
+                (mean, qz) = self.filter.correct(timestep, z, state, **filt_args)
                 cov = self.filter.cov
                 w = qz * det_weights[jj]
                 gm.means.append(mean)
@@ -295,8 +387,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
         return gm
 
-    def prune(self, **kwargs):
-        """ Removes hypotheses below a threshold.
+    def prune(self):
+        """Removes hypotheses below a threshold.
 
         This should be called once per time step after the correction and
         before the state extraction.
@@ -309,7 +401,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             del self._gaussMix.weights[index]
             del self._gaussMix.covariances[index]
 
-    def merge(self, **kwargs):
+    def merge(self):
+        """Merges nearby hypotheses."""
         loop_inds = set(range(0, len(self._gaussMix.means)))
 
         w_lst = []
@@ -344,8 +437,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self._gaussMix.means = m_lst
         self._gaussMix.covariances = p_lst
 
-    def cap(self, **kwargs):
-        """ Removes least likely hypotheses until a maximum number is reached.
+    def cap(self):
+        """Removes least likely hypotheses until a maximum number is reached.
 
         This should be called once per time step after pruning and
         before the state extraction.
@@ -360,14 +453,11 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             self._gaussMix.weights = [x * (w / sum(self._gaussMix.weights))
                                       for x in self._gaussMix.weights]
 
-    def extract_states(self, **kwargs):
-        """ Extracts the best state estimates.
+    def extract_states(self):
+        """Extracts the best state estimates.
 
         This extracts the best states from the distribution. It should be
-        called once per time step after the correction function. This calls
-        both the inner filters predict and correct functions so the keyword
-        arguments must contain any additional variables needed by those
-        functions.
+        called once per time step after the correction function.
         """
         inds = np.where(np.asarray(self._gaussMix.weights)
                         >= self.extract_threshold)
@@ -433,7 +523,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
     def plot_states(self, plt_inds, state_lbl='States', state_color=None,
                     **kwargs):
-        """ Plots the best estimate for the states.
+        """Plots the best estimate for the states.
 
         This assumes that the states have been extracted. It's designed to plot
         two of the state variables (typically x/y position). The error ellipses
@@ -451,15 +541,19 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             - lgnd_loc
             - marker
 
-        Args:
-            plt_inds (list): List of indices in the state vector to plot
-            state_lbl (string): Value to appear in legend for the states. Only
-                appears if the legend is shown
+        Parameters
+        ----------
+        plt_inds : list
+            List of indices in the state vector to plot
+        state_lbl : string
+            Value to appear in legend for the states. Only appears if the
+            legend is shown
 
-        Returns:
-            (Matplotlib figure): Instance of the matplotlib figure used
+        Returns
+        -------
+        Matplotlib figure
+            Instance of the matplotlib figure used
         """
-
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         true_states = opts['true_states']
@@ -578,7 +672,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 my_ii = [m[meas_inds[1]].item() for m in meas_tt]
                 meas_x.extend(mx_ii)
                 meas_y.extend(my_ii)
-            color = (128/255, 128/255, 128/255)
+            color = (128 / 255, 128 / 255, 128 / 255)
             meas_x = np.asarray(meas_x)
             meas_y = np.asarray(meas_y)
             if not added_meas_lbl:
@@ -603,6 +697,43 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
     def animate_state_plot(self, plt_inds, state_lbl='States', state_color=None,
                            interval=250, repeat=True, repeat_delay=1000,
                            save_path=None, **kwargs):
+        """Creates an animated plot of the states.
+
+        Parameters
+        ----------
+        plt_inds : list
+            indices of the state vector to plot.
+        state_lbl : string, optional
+            label for the states. The default is 'States'.
+        state_color : tuple, optional
+            3-tuple for rgb value. The default is None.
+        interval : int, optional
+            interval of the animation in ms. The default is 250.
+        repeat : bool, optional
+            flag indicating if the animation loops. The default is True.
+        repeat_delay : int, optional
+            delay between loops in ms. The default is 1000.
+        save_path : string, optional
+            file path and name to save the gif, does not save if not given.
+            The default is None.
+        **kwargs : dict, optional
+            Standard plotting options for
+            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            implements
+
+                - f_hndl
+                - sig_bnd
+                - rng
+                - meas_inds
+                - lgnd_loc
+                - marker
+
+        Returns
+        -------
+        anim :
+            handle to the animation.
+
+        """
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         sig_bnd = opts['sig_bnd']
@@ -641,7 +772,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                                             marker=marker, label=state_lbl)
         meas_scat = None
         if plt_meas:
-            m_color = (128/255, 128/255, 128/255)
+            m_color = (128 / 255, 128 / 255, 128 / 255)
 
             if meas_scat is None:
                 if not added_meas_lbl:
@@ -708,14 +839,25 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
 
 class CardinalizedPHD(ProbabilityHypothesisDensity):
-    """ Cardinalized Probability Hypothesis Density Filter
+    """Implements the Cardinalized Probability Hypothesis Density filter.
 
+    The kwargs in the constructor are passed through to the parent constructor.
 
+    Notes
+    -----
+    The filter implementation is based on
+    :cite:`Vo2006_TheCardinalizedProbabilityHypothesisDensityFilterforLinearGaussianMultiTargetModels`
+    and :cite:`Vo2007_AnalyticImplementationsoftheCardinalizedProbabilityHypothesisDensityFilter`.
+
+    Attributes
+    ----------
+    agents_per_state : list, optional
+        number of agents per state. The default is [].
     """
 
-    def __init__(self, **kwargs):
-        self.agents_per_state = []
-        self._max_expected_card = 10
+    def __init__(self, agents_per_state=[], max_expected_card=10, **kwargs):
+        self.agents_per_state = agents_per_state
+        self._max_expected_card = max_expected_card
 
         self._card_dist = np.zeros(self.max_expected_card + 1)  # local copy for internal modification
         self._card_dist[0] = 1
@@ -726,6 +868,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
     @property
     def max_expected_card(self):
+        """Maximum expected cardinality. The default is 10."""
         return self._max_expected_card
 
     @max_expected_card.setter
@@ -736,20 +879,30 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
     @property
     def cardinality(self):
+        """Cardinality of the RFS."""
         return np.argmax(self._card_dist)
 
-    def predict(self, **kwargs):
-        """ Prediction step of the CPHD filter.
+    def predict(self, timestep, **kwargs):
+        """Prediction step of the CPHD filter.
 
         This predicts new hypothesis, and propogates them to the next time
-        step. It also updates the cardinality distribution. Because this calls
-        the inner filter's predict function, the keyword arguments must contain
-        any information needed by that function.
+        step. It also updates the cardinality distribution.
 
-        Keyword Args:
+
+        Parameters
+        ----------
+        timestep: float
+            current timestep
+        **kwargs : dict, optional
+            See :meth:gasur.swarm_estimator.tracker.ProbabilityHypothesisDensity.predict`
+            for the available arguments.
+
+        Returns
+        -------
+        None.
 
         """
-        super().predict(**kwargs)
+        super().predict(timestep, **kwargs)
 
         survive_cdn_predict = np.zeros(self.max_expected_card + 1)
         for j in range(0, self.max_expected_card):
@@ -777,49 +930,57 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 temp.append(-np.sum(np.log(range(1, n - j + 1))))
                 terms[j, 0] = np.exp(np.sum(temp)) * survive_cdn_predict[j]
             cdn_predict[n] = np.sum(terms)
-        self._card_dist = (cdn_predict/np.sum(cdn_predict)).copy()
+        self._card_dist = (cdn_predict / np.sum(cdn_predict)).copy()
 
-    def correct(self, **kwargs):
-        """ Correction step of the CPHD filter.
+    def correct(self, timestep, meas_in, meas_mat_args={}, est_meas_args={},
+                filt_args={}):
+        """Correction step of the CPHD filter.
 
         This corrects the hypotheses based on the measurements and gates the
         measurements according to the class settings. It also updates the
-        cardinality distribution. Because this calls the inner filter's correct
-        function, the keyword arguments must contain any information needed by
-        that function.
+        cardinality distribution.
 
-        Keyword Args:
-            meas (list): List of Nm x 1 numpy arrays that contain all the
-                measurements needed for this correction
+
+        Parameters
+        ----------
+        timestep: float
+            current timestep
+        meas_in : list
+            2d numpy arrays representing a measurement.
+        meas_mat_args : dict, optional
+            keyword arguments to pass to the inner filters get measurement
+            matrix function. Only used if gating is on. The default is {}.
+        est_meas_args : TYPE, optional
+            keyword arguments to pass to the inner filters estimate
+            measurements function. Only used if gating is on. The default is {}.
+        filt_args : TYPE, optional
+            keyword arguments to pass to the inner filters correct function.
+            The default is {}.
+
+        Returns
+        -------
+        None.
+
         """
-        meas = deepcopy(kwargs['meas'])
-        del kwargs['meas']
+        meas = deepcopy(meas_in)
 
         if self.gating_on:
             meas = self._gate_meas(meas, self._gaussMix.means,
-                                   self._gaussMix.covariances, **kwargs)
+                                   self._gaussMix.covariances, meas_mat_args,
+                                   est_meas_args)
 
         self._meas_tab.append(meas)
 
         gmix = deepcopy(self._gaussMix)  # predicted gm
 
-        self._gaussMix = self.correct_prob_density(meas=meas, probDensity=gmix,
-                                                   **kwargs)
+        self._gaussMix = self._correct_prob_density(timestep, meas, gmix, filt_args)
 
-    def correct_prob_density(self, meas, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
+    def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
+        """Helper function for correction step.
+
+        Loops over all elements in a probability distribution and preforms
         the filter correction.
-
-        Keyword Args:
-            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
-                probability density to run correction on
-            meas (list): List of measurements, each is a N x 1 numpy array
-
-        Returns:
-                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
-                  corrected probability density
         """
-        probDensity = kwargs['probDensity']
         w_pred = np.zeros((len(probDensity.weights), 1))
         for i in range(0, len(probDensity.weights)):
             w_pred[i] = probDensity.weights[i]
@@ -837,16 +998,16 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             for p_ind in range(0, plen):
                 self.filter.cov = probDensity.covariances[p_ind]
                 state = probDensity.means[p_ind]
-                (mean, qz) = self.filter.correct(meas=meas[z_ind],
-                                                 cur_state=state,
-                                                 **kwargs)
+
+                (mean, qz) = self.filter.correct(timestep, meas[z_ind], state,
+                                                 **filt_args)
                 cov = self.filter.cov
                 qz_temp[p_ind, z_ind] = qz
                 mean_temp[z_ind, :, p_ind] = np.ndarray.flatten(mean)
                 cov_temp[[p_ind], :, :] = cov
 
         xivals = np.zeros(zlen)
-        pdc = self.prob_detection/self.clutter_den
+        pdc = self.prob_detection / self.clutter_den
         for e in range(0, zlen):
             xivals[e] = pdc * np.dot(w_pred.T, qz_temp[:, [e]])
             # xilog = []
@@ -938,14 +1099,11 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         return gmix
 
-    def extract_states(self, **kwargs):
-        """ Extracts the best state estimates.
+    def extract_states(self):
+        """Extracts the best state estimates.
 
         This extracts the best states from the distribution. It should be
-        called once per time step after the correction function. This calls
-        both the inner filters predict and correct functions so the keyword
-        arguments must contain any additional variables needed by those
-        functions.
+        called once per time step after the correction function.
         """
         s_weights = np.argsort(self._gaussMix.weights)[::-1]
         s_lst = []
@@ -978,21 +1136,30 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             self._n_states_per_time.append(ii)
 
     def plot_card_dist(self, **kwargs):
-        """ Plots the current cardinality distribution.
+        """Plots the current cardinality distribution.
 
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keyword arguments are processed with
-        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
-        implements
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are processed with
+            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            implements
 
-            - f_hndl
+                - f_hndl
 
-        Returns:
-            (Matplotlib figure): Instance of the matplotlib figure used
+        Returns
+        -------
+        Matplotlib figure
+            Instance of the matplotlib figure used
+
+        Raises
+        ------
+        RuntimeWarning
+            If the cardinality distribution is empty.
         """
-
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
 
@@ -1014,35 +1181,36 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         return f_hndl
 
-    def plot_card_time_hist(self, **kwargs):
-        """ Plots the current cardinality time history.
+    def plot_card_time_hist(self, true_card=None, **kwargs):
+        """Plots the current cardinality time history.
 
         This assumes that the cardinality distribution has been calculated by
         the class.
 
-        Keyword arguments are processed with
-        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
-        implements
+        Parameters
+        ----------
+        true_card : array like
+            List of the true cardinality at each time
+        **kwargs : dict, optional
+            Keyword arguments are processed with
+            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            implements
 
-            - f_hndl
-            - sig_bnd
-            - time_vec
-            - lgnd_loc
+                - f_hndl
+                - sig_bnd
+                - time_vec
+                - lgnd_loc
 
-        Keyword Args:
-            true_card (array like): List of the true cardinality at each time
-
-        Returns:
-            (Matplotlib figure): Instance of the matplotlib figure used
+        Returns
+        -------
+        Matplotlib figure
+            Instance of the matplotlib figure used
         """
-
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         sig_bnd = opts['sig_bnd']
         time_vec = opts['time_vec']
         lgnd_loc = opts['lgnd_loc']
-
-        true_card = kwargs.get('true_card', None)
 
         if len(self._card_time_hist) == 0:
             raise RuntimeWarning("Empty Cardinality")
@@ -1096,6 +1264,29 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         return f_hndl
 
     def plot_number_states_per_time(self, **kwargs):
+        """Plots the number of states per timestep.
+
+        This is a debug plot for if there are 0 weights in the GM but the
+        cardinality is not reached. Debug plots must be turned on prior to
+        running the filter.
+
+
+        Parameters
+        ----------
+        **kwargs : dict, optional
+            Keyword arguments are processed with
+            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            implements
+
+                - f_hndl
+                - lgnd_loc
+
+        Returns
+        -------
+        f_hndl : matplotlib figure
+            handle to the current figure.
+
+        """
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         lgnd_loc = opts['lgnd_loc']
@@ -1124,26 +1315,35 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
 
 class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
-    """ Delta-Generalized Labeled Multi-Bernoulli filter.
+    """Delta-Generalized Labeled Multi-Bernoulli filter.
 
+    Notes
+    -----
     This is based on :cite:`Vo2013_LabeledRandomFiniteSetsandMultiObjectConjugatePriors`
     and :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
     It does not account for agents spawned from existing tracks, only agents
     birthed from the given birth model.
 
-    Attributes:
-        req_births (int): Number of requested birth hypotheses
-        req_surv (int): Number of requested surviving hypotheses
-        req_upd (int): Number of requested updated hypotheses
-        gating_on (bool): Determines if measurements are gated
-        birth_terms (list): List of tuples where the first element is
-            a :py:class:`gasur.utilities.distributions.GaussianMixture` and
-            the second is the birth probability for that term
-        prune_threshold (float): Minimum association probability to keep when
-            pruning
-        max_hyps (int): Maximum number of hypotheses to keep when capping
-        save_covs (bool): Save covariance matrix for each state during state
-            extraction
+    Attributes
+    ----------
+    req_births : int
+        Number of requested birth hypotheses
+    req_surv : int
+        Number of requested surviving hypotheses
+    req_upd : int
+        Number of requested updated hypotheses
+    gating_on : bool
+        Determines if measurements are gated
+    birth_terms :list
+        List of tuples where the first element is a
+        :py:class:`gasur.utilities.distributions.GaussianMixture` and
+        the second is the birth probability for that term
+    prune_threshold : float
+        Minimum association probability to keep when pruning
+    max_hyps : int
+        Maximum number of hypotheses to keep when capping
+    save_covs : bool
+        Save covariance matrix for each state during state extraction
     """
 
     class _TabEntry:
@@ -1151,6 +1351,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self.label = ()  # time step born, index of birth model born from
             self.probDensity = None  # must be a distribution class
             self.meas_assoc_hist = []  # list indices into measurement list per time step
+
+            """ linear index corresponding to timestep, manually updated. Used
+            to index things since timestep in label can have decimals."""
+            self.time_index = None
 
     class _HypothesisHelper:
         def __init__(self):
@@ -1161,14 +1365,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         def num_tracks(self):
             return len(self.track_set)
 
-    def __init__(self, **kwargs):
-        self.req_births = 0
-        self.req_surv = 0
-        self.req_upd = 0
-        self.gating_on = False
-        self.prune_threshold = 1*10**(-15)
-        self.max_hyps = 3000
-        self.save_covs = False
+    def __init__(self, req_births=None, req_surv=None, req_upd=None,
+                 gating_on=False, prune_threshold=10**-15, max_hyps=3000,
+                 save_covs=False, **kwargs):
+        self.req_births = req_births
+        self.req_surv = req_surv
+        self.req_upd = req_upd
+        self.gating_on = gating_on
+        self.prune_threshold = prune_threshold
+        self.max_hyps = max_hyps
+        self.save_covs = save_covs
 
         self._track_tab = []  # list of all possible tracks
         self._states = []  # local copy for internal modification
@@ -1185,11 +1391,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self._card_dist = []  # probability of having index # as cardinality
 
+        """ linear index corresponding to timestep, manually updated. Used
+            to index things since timestep in label can have decimals. Must
+            be updated once per time step."""
+        self._time_index_cntr = 0
+
         super().__init__(**kwargs)
 
     @property
     def states(self):
-        """ Read only list of extracted states.
+        """Read only list of extracted states.
 
         This is a list with 1 element per timestep, and each element is a list
         of the best states extracted at that timestep. The order of each
@@ -1199,7 +1410,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     @property
     def labels(self):
-        """ Read only list of extracted labels.
+        """Read only list of extracted labels.
 
         This is a list with 1 element per timestep, and each element is a list
         of the best labels extracted at that timestep. The order of each
@@ -1209,15 +1420,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     @property
     def covariances(self):
-        """ Read only list of extracted covariances.
+        """Read only list of extracted covariances.
 
         This is a list with 1 element per timestep, and each element is a list
         of the best covariances extracted at that timestep. The order of each
         element corresponds to the state order.
 
-        Raises:
-            RuntimeWarning: If the class is not saving the covariances, and
-                returns an empty list
+        Raises
+        ------
+        RuntimeWarning
+            If the class is not saving the covariances, and returns an empty list.
         """
         if not self.save_covs:
             raise RuntimeWarning("Not saving covariances")
@@ -1226,11 +1438,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     @property
     def cardinality(self):
-        """ The cardinality estimate
-        """
+        """Cardinality estimate."""
         return np.argmax(self._card_dist)
 
-    def _gen_birth_tab(self, time_step):
+    def _gen_birth_tab(self, timestep):
         log_cost = []
         birth_tab = []
         for ii, (distrib, p) in enumerate(self.birth_terms):
@@ -1238,7 +1449,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             log_cost.append(-np.log(cost))
             entry = self._TabEntry()
             entry.probDensity = deepcopy(distrib)
-            entry.label = (time_step, ii)
+            entry.label = (timestep, ii)
+            entry.time_index = self._time_index_cntr
             birth_tab.append(entry)
 
         return birth_tab, log_cost
@@ -1258,10 +1470,30 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         return birth_hyps
 
-    def _gen_surv_tab(self, **kwargs):
+    def _predict_prob_density(self, timestep, probDensity, filt_args):
+        """Loops over probability distribution and preforms prediction."""
+        gm_tup = zip(probDensity.means,
+                     probDensity.covariances)
+        gm = GaussianMixture()
+        gm.weights = probDensity.weights.copy()
+        for ii, (m, P) in enumerate(gm_tup):
+            self.filter.cov = P
+            n_mean = self.filter.predict(timestep, m, **filt_args)
+            gm.covariances.append(self.filter.cov.copy())
+            gm.means.append(n_mean)
+
+        return gm
+
+    def _predict_track_tab_entry(self, tab, timestep, filt_args):
+        """Updates table entries probability density."""
+        newTab = deepcopy(tab)
+        newTab.probDensity = self._predict_prob_density(timestep, tab.probDensity, filt_args)
+        return newTab
+
+    def _gen_surv_tab(self, timestep, filt_args):
         surv_tab = []
         for (ii, track) in enumerate(self._track_tab):
-            entry = self.predict_track_tab_entry(track, **kwargs)
+            entry = self._predict_track_tab_entry(track, timestep, filt_args)
 
             surv_tab.append(entry)
 
@@ -1305,7 +1537,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         return surv_hyps
 
-    def _calc_avg_prob_surv_death(self, **kwargs):
+    def _calc_avg_prob_surv_death(self):
         avg_prob_survive = self.prob_survive * np.ones(len(self._track_tab))
         avg_prob_death = 1 - avg_prob_survive
 
@@ -1329,21 +1561,62 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             n_val = self._hypotheses[ii].assoc_prob / tot_w
             self._hypotheses[ii].assoc_prob = n_val
 
-    def predict(self, **kwargs):
-        """ Prediction step of the GLMB filter.
+    def _calc_card_dist(self, hyp_lst):
+        """Calucaltes the cardinality distribution."""
+        if len(hyp_lst) == 0:
+            return [1, ]
+
+        card_dist = []
+        for ii in range(0, max(map(lambda x: x.num_tracks, hyp_lst)) + 1):
+            card = 0
+            for hyp in hyp_lst:
+                if hyp.num_tracks == ii:
+                    card = card + hyp.assoc_prob
+            card_dist.append(card)
+        return card_dist
+
+    def _clean_predictions(self):
+        hash_lst = []
+        for hyp in self._hypotheses:
+            if len(hyp.track_set) == 0:
+                lst = []
+            else:
+                sorted_inds = hyp.track_set.copy()
+                sorted_inds.sort()
+                lst = [int(x) for x in sorted_inds]
+            h = hash('*'.join(map(str, lst)))
+            hash_lst.append(h)
+
+        new_hyps = []
+        used_hash = []
+        for ii, h in enumerate(hash_lst):
+            if h not in used_hash:
+                used_hash.append(h)
+                new_hyps.append(self._hypotheses[ii])
+            else:
+                new_ii = used_hash.index(h)
+                new_hyps[new_ii].assoc_prob += self._hypotheses[ii].assoc_prob
+        self._hypotheses = new_hyps
+
+    def predict(self, timestep, filt_args={}):
+        """Prediction step of the GLMB filter.
 
         This predicts new hypothesis, and propogates them to the next time
-        step. It also updates the cardinality distribution. Because this calls
-        the inner filter's predict function, the keyword arguments must contain
-        any information needed by that function.
+        step. It also updates the cardinality distribution.
 
-        Keyword Args:
-            time_step (int): Current time step number for the new labels
+        Parameters
+        ----------
+        timestep: float
+            Current timestep.
+        filt_args : dict, optional
+            Passed to the inner filter. The default is {}.
+
+        Returns
+        -------
+        None.
         """
-
         # Find cost for each birth track, and setup lookup table
-        time_step = kwargs['time_step']
-        birth_tab, log_cost = self._gen_birth_tab(time_step)
+        birth_tab, log_cost = self._gen_birth_tab(timestep)
 
         # get K best hypothesis, and their index in the lookup table
         (paths, hyp_costs) = k_shortest(np.array(log_cost), self.req_births)
@@ -1352,7 +1625,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         birth_hyps = self._gen_birth_hyps(paths, hyp_costs)
 
         # Init and propagate surviving track table
-        surv_tab = self._gen_surv_tab(**kwargs)
+        surv_tab = self._gen_surv_tab(timestep, filt_args)
 
         # Calculation for average survival/death probabilities
         (avg_prob_survive,
@@ -1361,7 +1634,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         # loop over postierior components
         surv_hyps = self._gen_surv_hyps(avg_prob_survive, avg_prob_death)
 
-        self._card_dist = self.calc_card_dist(surv_hyps)
+        self._card_dist = self._calc_card_dist(surv_hyps)
 
         # Get  predicted hypothesis by convolution
         self._track_tab = birth_tab + surv_tab
@@ -1369,54 +1642,36 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self._clean_predictions()
 
-    def predict_track_tab_entry(self, tab, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter correction.
-
-        Args:
-            tab (Track Table class): An entry in the track table, class is
-                internal to the parent class.
-
-        Returns:
-            tuple containing
-
-                - newTab (Track table class): A track table class instance with
-                  predicted probability density
-        """
-        probDensity = tab.probDensity
-        newTab = deepcopy(tab)
-
-        pd = self.predict_prob_density(probDensity, **kwargs)
-        newTab.probDensity = pd
-        return newTab
-
-    def predict_prob_density(self, probDensity, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter prediction.
-
-        Args:
-            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
-                probability density to run prediction on
-
-        Returns:
-            gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
-                predicted probability density
-        """
-        gm_tup = zip(probDensity.means,
-                     probDensity.covariances)
-        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
+    def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
+        """Loops over a probability distribution and preforms correction."""
         gm = GaussianMixture()
-        gm.weights = probDensity.weights.copy()
-        for ii, (m, P) in enumerate(gm_tup):
-            self.filter.cov = P
-            n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
-                                         **kwargs)
-            gm.covariances.append(self.filter.cov.copy())
-            gm.means.append(n_mean)
+        for jj in range(0, len(probDensity.means)):
+            self.filter.cov = probDensity.covariances[jj]
+            state = probDensity.means[jj]
+            (mean, qz) = self.filter.correct(timestep, meas, state, **filt_args)
+            cov = self.filter.cov
+            w = qz * probDensity.weights[jj]
+            gm.means.append(mean)
+            gm.covariances.append(cov)
+            gm.weights.append(w)
+        lst = gm.weights
+        lst = [x + np.finfo(float).eps for x in lst]
+        gm.weights = lst
+        cost = sum(gm.weights)
+        for jj in range(0, len(gm.weights)):
+            gm.weights[jj] /= cost
 
-        return gm
+        return (gm, cost)
 
-    def _gen_cor_tab(self, num_meas, meas, **kwargs):
+    def _correct_track_tab_entry(self, meas, tab, timestep, filt_args):
+        newTab = deepcopy(tab)
+        newTab.probDensity, cost = self._correct_prob_density(timestep, meas,
+                                                              tab.probDensity,
+                                                              filt_args)
+
+        return newTab, cost
+
+    def _gen_cor_tab(self, num_meas, meas, timestep, filt_args):
         num_pred = len(self._track_tab)
         up_tab = []
         for ii in range(0, (num_meas + 1) * num_pred):
@@ -1432,7 +1687,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             for ii, ent in enumerate(self._track_tab):
                 s_to_ii = num_pred * emm + ii + num_pred
                 (up_tab[s_to_ii], cost) = \
-                    self.correct_track_tab_entry(z, ent, **kwargs)
+                    self._correct_track_tab_entry(z, ent, timestep, filt_args)
 
                 # update association history with current measurement index
                 up_tab[s_to_ii].meas_assoc_hist += [emm]
@@ -1504,29 +1759,60 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         return up_hyps
 
-    def _calc_avg_prob_det_mdet(self, **kwargs):
+    def _calc_avg_prob_det_mdet(self):
         avg_prob_detect = self.prob_detection * np.ones(len(self._track_tab))
         avg_prob_miss_detect = 1 - avg_prob_detect
 
         return avg_prob_detect, avg_prob_miss_detect
 
-    def correct(self, **kwargs):
-        """ Correction step of the GLMB filter.
+    def _clean_updates(self):
+        used = [0] * len(self._track_tab)
+        for hyp in self._hypotheses:
+            for ii in hyp.track_set:
+                used[ii] += 1
+        nnz_inds = [idx for idx, val in enumerate(used) if val != 0]
+        track_cnt = len(nnz_inds)
 
+        new_inds = [0] * len(self._track_tab)
+        for (ii, v) in zip(nnz_inds, [ii for ii in range(0, track_cnt)]):
+            new_inds[ii] = v
+
+        new_tab = [deepcopy(self._track_tab[ii]) for ii in nnz_inds]
+        new_hyps = []
+        for(ii, hyp) in enumerate(self._hypotheses):
+            if len(hyp.track_set) > 0:
+                hyp.track_set = [new_inds[ii] for ii in hyp.track_set]
+            new_hyps.append(hyp)
+
+        self._track_tab = new_tab
+        self._hypotheses = new_hyps
+
+    def correct(self, timestep, meas, filt_args={}):
+        """Correction step of the GLMB filter.
+
+        Notes
+        -----
         This corrects the hypotheses based on the measurements and gates the
         measurements according to the class settings. It also updates the
-        cardinality distribution. Because this calls the inner filter's correct
-        function, the keyword arguments must contain any information needed by
-        that function.
+        cardinality distribution.
 
-        Keyword Args:
-            meas (list): List of Nm x 1 numpy arrays that contain all the
-                measurements needed for this correction
+        Parameters
+        ----------
+        timestep: float
+            Current timestep.
+        meas_in : list
+            List of Nm x 1 numpy arrays each representing a measuremnt.
+        filt_args : dict, optional
+            keyword arguments to pass to the inner filters correct function.
+            The default is {}.
+
+        .. todo::
+            Fix the measurement gating
+
+        Returns
+        -------
+        None
         """
-
-        meas = deepcopy(kwargs['meas'])
-        del kwargs['meas']
-
         # gate measurements by tracks
         if self.gating_on:
             means = []
@@ -1534,16 +1820,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             for ent in self._track_tab:
                 means.extend(ent.probDensity.means)
                 covs.extend(ent.probDensity.covariances)
-            meas = self._gate_meas(meas, means, covs, **kwargs)
+            meas = self._gate_meas(meas, means, covs)
 
-        self._meas_tab.append(meas)
+        self._meas_tab.append(deepcopy(meas))
         num_meas = len(meas)
 
         # missed detection tracks
-        cor_tab, all_cost_m = self._gen_cor_tab(num_meas, meas, **kwargs)
+        cor_tab, all_cost_m = self._gen_cor_tab(num_meas, meas, timestep, filt_args)
 
         # Calculation for average detection/missed probabilities
-        avg_prob_det, avg_prob_mdet = self._calc_avg_prob_det_mdet(**kwargs)
+        avg_prob_det, avg_prob_mdet = self._calc_avg_prob_det_mdet()
 
         # component updates
         cor_hyps = self._gen_cor_hyps(num_meas, avg_prob_det, avg_prob_mdet,
@@ -1552,132 +1838,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         # save values and cleanup
         self._track_tab = cor_tab
         self._hypotheses = cor_hyps
-        self._card_dist = self.calc_card_dist(self._hypotheses)
+        self._card_dist = self._calc_card_dist(self._hypotheses)
         self._clean_updates()
 
-    def correct_track_tab_entry(self, meas, tab, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter correction.
-
-        Args:
-            tab (Track Table class): An entry in the track table, class is
-                internal to the parent class.
-            meas (list): List of measurements, each is a N x 1 numpy array
-
-        Returns:
-            tuple containing
-
-                - newTab (Track table class): A track table class instance with
-                  corrected probability density
-                - cost (float): Total cost of for the m best assignment
-        """
-        probDensity = tab.probDensity
-        newTab = deepcopy(tab)
-
-        pd, cost = self.correct_prob_density(meas, probDensity, **kwargs)
-        newTab.probDensity = pd
-        return newTab, cost
-
-    def correct_prob_density(self, meas, probDensity, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter correction.
-
-        Args:
-            probDensity (:py:class:`gasur.utilities.distributions.GaussianMixture`): A
-                probability density to run correction on
-            meas (list): List of measurements, each is a N x 1 numpy array
-
-        Returns:
-            tuple containing
-
-                - gm (:py:class:`gasur.utilities.distributions.GaussianMixture`): The
-                  corrected probability density
-                - cost (float): Total cost of for the m best assignment
-        """
-        gm = GaussianMixture()
-        for jj in range(0, len(probDensity.means)):
-            self.filter.cov = probDensity.covariances[jj]
-            state = probDensity.means[jj]
-            (mean, qz) = self.filter.correct(meas=meas, cur_state=state,
-                                             **kwargs)
-            cov = self.filter.cov
-            w = qz * probDensity.weights[jj]
-            gm.means.append(mean)
-            gm.covariances.append(cov)
-            gm.weights.append(w)
-        lst = gm.weights
-        lst = [x + np.finfo(float).eps for x in lst]
-        gm.weights = lst
-        cost = sum(gm.weights)
-        for jj in range(0, len(gm.weights)):
-            gm.weights[jj] /= cost
-
-        return (gm, cost)
-
-    def extract_most_prob_states(self, thresh, **kwargs):
-        loc_self = deepcopy(self)
-        state_sets = []
-        cov_sets = []
-        label_sets = []
-        probs = []
-
-        idx = loc_self.extract_states(**kwargs)
-        if idx is None:
-            return (state_sets, label_sets, cov_sets, probs)
-
-        state_sets.append(loc_self.states.copy())
-        label_sets.append(loc_self.labels.copy())
-        if loc_self.save_covs:
-            cov_sets.append(loc_self.covariances.copy())
-        probs.append(loc_self._hypotheses[idx].assoc_prob)
-        loc_self._hypotheses[idx].assoc_prob = 0
-        while True:
-            idx = loc_self.extract_states(**kwargs)
-            if idx is None:
-                break
-
-            if loc_self._hypotheses[idx].assoc_prob >= thresh:
-                state_sets.append(loc_self.states.copy())
-                label_sets.append(loc_self.labels.copy())
-                if loc_self.save_covs:
-                    cov_sets.append(loc_self.covariances.copy())
-                probs.append(loc_self._hypotheses[idx].assoc_prob)
-                loc_self._hypotheses[idx].assoc_prob = 0
-            else:
-                break
-
-        return (state_sets, label_sets, cov_sets, probs)
-
-    def extract_states(self, **kwargs):
-        """ Extracts the best state estimates.
-
-        This extracts the best states from the distribution. It should be
-        called once per time step after the correction function. This calls
-        both the inner filters predict and correct functions so the keyword
-        arguments must contain any additional variables needed by those
-        functions.
-
-        Returns:
-            idx_cmp (int): Index of the hypothesis table used when extracting
-                states
-        """
-
-        card = np.argmax(self._card_dist)
-        tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
-        weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
-
-        if len(tracks_per_hyp) == 0:
-            self._states = [[]]
-            self._labels = [[]]
-            self._covs = [[]]
-            return None
-
-        idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
+    def _update_extract_hist(self, idx_cmp):
         meas_hists = []
         labels = []
         for ptr in self._hypotheses[idx_cmp].track_set:
             meas_hists.append(self._track_tab[ptr].meas_assoc_hist.copy())
-            labels.append(self._track_tab[ptr].label)
+            tmp_lbl = (*self._track_tab[ptr].label, self._track_tab[ptr].time_index)
+            labels.append(tmp_lbl)
 
         both = set(self._lab_mem).intersection(labels)
         surv_ii = [labels.index(x) for x in both]
@@ -1693,6 +1863,55 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             + [meas_hists[ii] for ii in surv_ii] \
             + [meas_hists[ii] for ii in new_ii]
 
+    def _extract_helper(self, pd, b_time, b_idx):
+        idx_trk = np.argmax(pd.weights)
+        new_state = pd.means[idx_trk]
+        new_cov = pd.covariances[idx_trk]
+        new_label = (b_time, b_idx)
+
+        return new_state, new_cov, new_label
+
+    def extract_states(self, pred_args={}, cor_args={}):
+        """Extracts the best state estimates.
+
+        This extracts the best states from the distribution. It should be
+        called once per time step after the correction function. This calls
+        both the inner filters predict and correct functions so the keyword
+        arguments must contain any additional variables needed by those
+        functions.
+
+        Parameters
+        ----------
+        pred_args : dict, optional
+            Additional arguments to pass to the inner filters prediction
+            function. The default is {}.
+        cor_args : dict, optional
+            Additional arguments to pass to the inner filters correction
+            function. The default is {}.
+
+        .. todo::
+            Improve the history tracking so it is not as convoluted and does
+            a better comparison for labels to protect against numerical issues
+            with floats in the timestamp.
+
+        Returns
+        -------
+        idx_cmp : int
+            Index of the hypothesis table used when extracting states.
+        """
+        card = np.argmax(self._card_dist)
+        tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
+        weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
+
+        if len(tracks_per_hyp) == 0:
+            self._states = [[]]
+            self._labels = [[]]
+            self._covs = [[]]
+            return None
+
+        idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
+        self._update_extract_hist(idx_cmp)
+
         self._states = [None] * len(self._meas_tab)
         self._labels = [None] * len(self._meas_tab)
         if self.save_covs:
@@ -1705,24 +1924,24 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._covs = [[]]
             return None
 
-        for (hist, (b_time, b_idx)) in zip(self._meas_asoc_mem, self._lab_mem):
+        for (hist, (b_time, b_idx, b_t_ind)) in zip(self._meas_asoc_mem, self._lab_mem):
             pd = deepcopy(self.birth_terms[b_idx][0])
 
             for (t_after_b, emm) in enumerate(hist):
+                timestep = b_time + t_after_b
                 # propagate for GM
-                pd = self.predict_prob_density(pd, **kwargs)
+                pd = self._predict_prob_density(timestep, pd, pred_args)
 
                 # measurement correction for GM
-                tt = b_time + t_after_b
+                tt = b_t_ind + t_after_b
                 if emm is not None:
                     meas = self._meas_tab[tt][emm].copy()
-                    pd = self.correct_prob_density(meas, pd, **kwargs)[0]
+                    pd = self._correct_prob_density(timestep, meas, pd, cor_args)[0]
 
                 # find best one and add to state table
-                idx_trk = np.argmax(pd.weights)
-                new_state = pd.means[idx_trk]
-                new_cov = pd.covariances[idx_trk]
-                new_label = (b_time, b_idx)
+                new_state, new_cov, new_label = self._extract_helper(pd,
+                                                                     b_time,
+                                                                     b_idx)
                 if self._labels[tt] is None:
                     self._states[tt] = [new_state]
                     self._labels[tt] = [new_label]
@@ -1733,15 +1952,77 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     self._labels[tt].append(new_label)
                     if self.save_covs:
                         self._covs[tt].append(new_cov)
+
         return idx_cmp
 
-    def prune(self, **kwargs):
-        """ Removes hypotheses below a threshold.
+    def extract_most_prob_states(self, thresh, pred_args={}, cor_args={}):
+        """Extracts the most probable hypotheses up to a threshold.
+
+        Parameters
+        ----------
+        thresh : float
+            Minimum association probability to extract.
+        pred_args : dict, optional
+            Additional arguments to pass to the inner filters prediction
+            function. The default is {}.
+        cor_args : dict, optional
+            Additional arguments to pass to the inner filters correction
+            function. The default is {}.
+
+        Returns
+        -------
+        state_sets : list
+            Each element is the state list from the normal
+            :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`.
+        label_sets : list
+            Each element is the label list from the normal
+            :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
+        cov_sets : list
+            Each element is the covariance list from the normal
+            :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
+            if the covariances are saved.
+        probs : list
+            Each element is the association probability for the extracted states.
+        """
+        loc_self = deepcopy(self)
+        state_sets = []
+        cov_sets = []
+        label_sets = []
+        probs = []
+
+        idx = loc_self.extract_states(pred_args=pred_args, cor_args=cor_args)
+        if idx is None:
+            return (state_sets, label_sets, cov_sets, probs)
+
+        state_sets.append(loc_self.states.copy())
+        label_sets.append(loc_self.labels.copy())
+        if loc_self.save_covs:
+            cov_sets.append(loc_self.covariances.copy())
+        probs.append(loc_self._hypotheses[idx].assoc_prob)
+        loc_self._hypotheses[idx].assoc_prob = 0
+        while True:
+            idx = loc_self.extract_states(pred_args=pred_args, cor_args=cor_args)
+            if idx is None:
+                break
+
+            if loc_self._hypotheses[idx].assoc_prob >= thresh:
+                state_sets.append(loc_self.states.copy())
+                label_sets.append(loc_self.labels.copy())
+                if loc_self.save_covs:
+                    cov_sets.append(loc_self.covariances.copy())
+                probs.append(loc_self._hypotheses[idx].assoc_prob)
+                loc_self._hypotheses[idx].assoc_prob = 0
+            else:
+                break
+
+        return (state_sets, label_sets, cov_sets, probs)
+
+    def _prune(self):
+        """Removes hypotheses below a threshold.
 
         This should be called once per time step after the correction and
         before the state extraction.
         """
-
         # Find hypotheses with low association probabilities
         temp_assoc_probs = np.array([])
         for ii in range(0, len(self._hypotheses)):
@@ -1757,15 +2038,14 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._hypotheses[ii].assoc_prob = (self._hypotheses[ii].assoc_prob
                                                / new_sum)
         # Re-calculate cardinality
-        self._card_dist = self.calc_card_dist(self._hypotheses)
+        self._card_dist = self._calc_card_dist(self._hypotheses)
 
-    def cap(self, **kwargs):
-        """ Removes least likely hypotheses until a maximum number is reached.
+    def _cap(self):
+        """Removes least likely hypotheses until a maximum number is reached.
 
         This should be called once per time step after pruning and
         before the state extraction.
         """
-
         # Determine if there are too many hypotheses
         if len(self._hypotheses) > self.max_hyps:
             temp_assoc_probs = np.array([])
@@ -1795,79 +2075,54 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                                                    / new_sum)
 
             # Re-calculate cardinality
-            self._card_dist = self.calc_card_dist(self._hypotheses)
+            self._card_dist = self._calc_card_dist(self._hypotheses)
 
-    def calc_card_dist(self, hyp_lst):
-        """ Calucaltes the cardinality distribution.
+    def cleanup(self, enable_prune=True, enable_cap=True, enable_extract=True,
+                pred_args={}, cor_args={}):
+        """Performs the cleanup step of the filter.
 
-        Args:
-            hyp_lst (list): list of hypotheses to use when finding the
-                distribution
+        This can prune, cap, and extract states. It must be called once per
+        timestep, even if all three functions are disabled. This is to ensure
+        that internal counters for tracking linear timestep indices are properly
+        incremented. If this is called with `enable_extract` set to true then
+        the extract states method does not need to be called separately. It is
+        recommended to call this function instead of
+        :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
+        directly.
 
-        Returns:
-            (list): Each element is the probability that the index is the
-            cardinality.
+        Parameters
+        ----------
+        enable_prune : bool, optional
+            Flag indicating if prunning should be performed. The default is True.
+        enable_cap : bool, optional
+            Flag indicating if capping should be performed. The default is True.
+        enable_extract : bool, optional
+            Flag indicating if state extraction should be performed. The default is True.
+        pred_args : dict, optional
+            Additional arguments to pass to the inner filter's prediction
+            function. The default is {}. Only used if extracting states.
+        cor_args : dict, optional
+            Additional arguments to pass to the inner filter's correction
+            function. The default is {}. Only used if extracting states.
+
+        Returns
+        -------
+        None.
+
         """
+        if enable_prune:
+            self._prune()
 
-        if len(hyp_lst) == 0:
-            return 0
+        if enable_cap:
+            self._cap()
 
-        card_dist = []
-        for ii in range(0, max(map(lambda x: x.num_tracks, hyp_lst)) + 1):
-            card = 0
-            for hyp in hyp_lst:
-                if hyp.num_tracks == ii:
-                    card = card + hyp.assoc_prob
-            card_dist.append(card)
-        return card_dist
+        if enable_extract:
+            self.extract_states(pred_args=pred_args, cor_args=cor_args)
 
-    def _clean_predictions(self):
-        hash_lst = []
-        for hyp in self._hypotheses:
-            if len(hyp.track_set) == 0:
-                lst = []
-            else:
-                sorted_inds = hyp.track_set.copy()
-                sorted_inds.sort()
-                lst = [int(x) for x in sorted_inds]
-            h = hash('*'.join(map(str, lst)))
-            hash_lst.append(h)
-
-        new_hyps = []
-        used_hash = []
-        for ii, h in enumerate(hash_lst):
-            if h not in used_hash:
-                used_hash.append(h)
-                new_hyps.append(self._hypotheses[ii])
-            else:
-                new_ii = used_hash.index(h)
-                new_hyps[new_ii].assoc_prob += self._hypotheses[ii].assoc_prob
-        self._hypotheses = new_hyps
-
-    def _clean_updates(self):
-        used = [0] * len(self._track_tab)
-        for hyp in self._hypotheses:
-            for ii in hyp.track_set:
-                used[ii] += 1
-        nnz_inds = [idx for idx, val in enumerate(used) if val != 0]
-        track_cnt = len(nnz_inds)
-
-        new_inds = [0] * len(self._track_tab)
-        for (ii, v) in zip(nnz_inds, [ii for ii in range(0, track_cnt)]):
-            new_inds[ii] = v
-
-        new_tab = [deepcopy(self._track_tab[ii]) for ii in nnz_inds]
-        new_hyps = []
-        for(ii, hyp) in enumerate(self._hypotheses):
-            if len(hyp.track_set) > 0:
-                hyp.track_set = [new_inds[ii] for ii in hyp.track_set]
-            new_hyps.append(hyp)
-
-        self._track_tab = new_tab
-        self._hypotheses = new_hyps
+        self._time_index_cntr += 1
 
     def plot_states_labels(self, plt_inds, **kwargs):
-        """ Plots the best estimate for the states and labels.
+        """Plots the best estimate for the states and labels.
 
         This assumes that the states have been extracted. It's designed to plot
         two of the state variables (typically x/y position). The error ellipses
@@ -1884,13 +2139,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             - meas_inds
             - lgnd_loc
 
-        Args:
-            plt_inds (list): List of indices in the state vector to plot
+        Parameters
+        ----------
+        plt_inds : list
+            List of indices in the state vector to plot
 
-        Returns:
-            (Matplotlib figure): Instance of the matplotlib figure used
+        Returns
+        -------
+        Matplotlib figure
+            Instance of the matplotlib figure used
         """
-
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
         true_states = opts['true_states']
@@ -1966,11 +2224,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 for tt, sig in enumerate(sigs):
                     if sig is None:
                         continue
-                    try:
-                        w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
-                    except Exception:
-                        brk = 1
-                        raise
+                    w, h, a = pltUtil.calc_error_ellipse(sig, sig_bnd)
                     if not added_sig_lbl:
                         s = r'${}\sigma$ Error Ellipses'.format(sig_bnd)
                         e = Ellipse(xy=x[plt_inds, tt], width=w,
@@ -2034,7 +2288,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 my_ii = [m[meas_inds[1]].item() for m in meas_tt]
                 meas_x.extend(mx_ii)
                 meas_y.extend(my_ii)
-            color = (128/255, 128/255, 128/255)
+            color = (128 / 255, 128 / 255, 128 / 255)
             meas_x = np.asarray(meas_x)
             meas_y = np.asarray(meas_y)
             if not added_meas_lbl:
@@ -2056,7 +2310,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         return f_hndl
 
     def plot_card_dist(self, **kwargs):
-        """ Plots the current cardinality distribution.
+        """Plots the current cardinality distribution.
 
         This assumes that the cardinality distribution has been calculated by
         the class.
@@ -2067,10 +2321,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
             - f_hndl
 
-        Returns:
-            (Matplotlib figure): Instance of the matplotlib figure used
+        Returns
+        -------
+        Matplotlib figure
+            Instance of the matplotlib figure used
         """
-
         opts = pltUtil.init_plotting_opts(**kwargs)
         f_hndl = opts['f_hndl']
 
@@ -2094,56 +2349,34 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
 
 class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    def predict_prob_density(self, probDensity, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter prediction.
+    """Implementation of a STM-GLMB filter."""
 
-        Keyword Args:
-            probDensity (:py:class:`gasur.utilities.distributions.StudentsTMixture`): A
-                probability density to run prediction on
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-        Returns:
-            pd (:py:class:`gasur.utilities.distributions.StudentsTMixture`): The
-                predicted probability density
-        """
+    def _predict_prob_density(self, timestep, probDensity, filt_args):
+        """Loops over probability distribution and preforms prediction."""
         self.filter.dof = probDensity.dof
         pd_tup = zip(probDensity.means,
                      probDensity.scalings)
-        c_in = np.zeros((self.filter.get_input_mat().shape[1], 1))
         pd = StudentsTMixture()
         pd.weights = probDensity.weights.copy()
         for ii, (m, P) in enumerate(pd_tup):
             self.filter.scale = P
-            n_mean = self.filter.predict(cur_state=m, cur_input=c_in,
-                                         **kwargs)
+            n_mean = self.filter.predict(timestep, m, **filt_args)
             pd.scalings.append(self.filter.scale.copy())
             pd.means.append(n_mean)
 
         return pd
 
-    def correct_prob_density(self, meas, probDensity, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter correction.
-
-        Keyword Args:
-            probDensity (:py:class:`gasur.utilities.distributions.StudentsTMixture`): A
-                probability density to run correction on
-            meas (list): List of measurements, each is a N x 1 numpy array
-
-        Returns:
-            tuple containing
-
-                - pd (:py:class:`gasur.utilities.distributions.StudentsTMixture`): The
-                  corrected probability density
-                - cost (float): Total cost of for the m best assignment
-        """
+    def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
+        """Loops over a probability distribution and preforms correction."""
         self.filter.dof = probDensity.dof
         pd = StudentsTMixture()
         for jj in range(0, len(probDensity.means)):
             self.filter.scale = probDensity.scalings[jj]
             state = probDensity.means[jj]
-            (mean, qz) = self.filter.correct(meas=meas, cur_state=state,
-                                             **kwargs)
+            (mean, qz) = self.filter.correct(timestep, meas, state, **filt_args)
             scale = self.filter.scale.copy()
             w = qz * probDensity.weights[jj]
             pd.means.append(mean)
@@ -2202,73 +2435,36 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             probability of survival for the list of particles
     """
 
-    class _TabEntry:
+    # inherit from parents local class to extend it
+    class _TabEntry(GeneralizedLabeledMultiBernoulli._TabEntry):
         def __init__(self):
-            self.label = ()  # time step born, index of birth model born from
-            self.probDensity = None  # must be a distribution class
-            self.meas_assoc_hist = []  # list indices into measurement list per time step
             self.prop_parts = []
 
-    def __init__(self, **kwargs):
-        self.compute_prob_detection = kwargs.get('compute_prob_detection',
-                                                 None)
-        self.compute_prob_survive = kwargs.get('compute_prob_survive', None)
+            super().__init__()
+
+    def __init__(self, compute_prob_detection=None, compute_prob_survive=None,
+                 **kwargs):
+        self.compute_prob_detection = compute_prob_detection
+        self.compute_prob_survive = compute_prob_survive
+
+        # for wrappers for predict/correct function to handle extra args for private functions
+        self._prob_surv_args = ()
+        self._prob_det_args = ()
+        self._rng = None
 
         super().__init__(**kwargs)
 
-    def _calc_avg_prob_surv_death(self, **kwargs):
-        avg_prob_survive = np.zeros(len(self._track_tab))
-        for tabidx, ent in enumerate(self._track_tab):
-            p_surv = self.compute_prob_survive(ent.probDensity.particles,
-                                               **kwargs)
-            avg_prob_survive[tabidx] = np.sum(np.array(ent.probDensity.weights)
-                                              * p_surv)
-
-        avg_prob_death = 1 - avg_prob_survive
-
-        return avg_prob_survive, avg_prob_death
-
-    def predict_track_tab_entry(self, tab, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter correction.
-
-        Args:
-            tab (Track Table class): An entry in the track table, class is
-                internal to the parent class.
-
-        Returns:
-            tuple containing
-
-                - newTab (Track table class): A track table class instance with
-                  predicted probability density
-        """
-        newTab = super().predict_track_tab_entry(tab, **kwargs)
-        newTab.prop_parts = deepcopy(self.filter._prop_parts)
-        return newTab
-
-    def predict_prob_density(self, probDensity, **kwargs):
-        """ This predicts the next probability density.
-
-
-        Args:
-            probDensity (:py:mod:`gasur.utilities.distributions`): Probability
-                distribution to use for prediction
-            **kwargs (dict): Passed through to the filters predict function.
-
-        Returns:
-            newProbDen (:py:mod:`gasur.utilities.distributions`): Predicted
-                probability distribution.
-
-        """
+    def _predict_prob_density(self, timestep, probDensity, filt_args):
+        """Predicts the next probability density."""
         self.filter.init_from_dist(deepcopy(probDensity))
         # cls_type = type(probDensity)
         # newProbDen = cls_type()
 
-        self.filter.predict(**kwargs)
+        self.filter.predict(timestep, **filt_args)
 
         newProbDen = self.filter.extract_dist()
 
-        ps = self.compute_prob_survive(probDensity.particles, **kwargs)
+        ps = self.compute_prob_survive(probDensity.particles, *self._prob_surv_args)
         new_weights = [w * ps[ii] for ii, (p, w) in enumerate(probDensity)]
         tot = sum(new_weights)
         if np.abs(tot) == np.inf:
@@ -2279,68 +2475,52 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         return newProbDen
 
-    def _calc_avg_prob_det_mdet(self, **kwargs):
-        avg_prob_detect = np.zeros(len(self._track_tab))
+    def _predict_track_tab_entry(self, tab, timestep, filt_args):
+        newTab = super()._predict_track_tab_entry(tab, timestep, filt_args)
+        newTab.prop_parts = deepcopy(self.filter._prop_parts)
+        return newTab
+
+    def _calc_avg_prob_surv_death(self):
+        avg_prob_survive = np.zeros(len(self._track_tab))
         for tabidx, ent in enumerate(self._track_tab):
-            p_detect = self.compute_prob_detection(ent.probDensity.particles,
-                                                   **kwargs)
-            avg_prob_detect[tabidx] = np.sum(np.array(ent.probDensity.weights)
-                                             * p_detect)
+            p_surv = self.compute_prob_survive(ent.probDensity.particles,
+                                               *self._prob_surv_args)
+            avg_prob_survive[tabidx] = np.sum(np.array(ent.probDensity.weights)
+                                              * p_surv)
 
-        avg_prob_miss_detect = 1 - avg_prob_detect
+        avg_prob_death = 1 - avg_prob_survive
 
-        return avg_prob_detect, avg_prob_miss_detect
+        return avg_prob_survive, avg_prob_death
 
-    def correct_track_tab_entry(self, meas, tab, **kwargs):
-        """ Loops over all elements in a probability distribution and preforms
-        the filter correction.
+    def predict(self, timestep, prob_surv_args=(), **kwargs):
+        """Prediction step of the SMC-GLMB filter.
 
-        Args:
-            tab (Track Table class): An entry in the track table, class is
-                internal to the parent class.
-            meas (list): List of measurements, each is a N x 1 numpy array
+        This is a wrapper for the parent class to allow for extra parameters.
+        See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.predict` for
+        additional details.
 
-        Returns:
-            tuple containing
-
-                - newTab (Track table class): A track table class instance with
-                  corrected probability density
-                - cost (float): Total cost of for the m best assignment
+        Parameters
+        ----------
+        timestep : float
+            Current timestep.
+        prob_surv_args : tuple, optional
+            Additional arguments for the `compute_prob_survive` function.
+            The default is ().
+        **kwargs : dict, optional
+            See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.predict`
         """
-        if len(tab.prop_parts) == 0:
-            # assume this is a new birth and prob_parts hasn't been initialized
-            prop_parts = deepcopy(tab.probDensity.particles)
-        else:
-            prop_parts = deepcopy(tab.prop_parts)
-        self.filter._prop_parts = prop_parts
-        newTab, cost = super().correct_track_tab_entry(meas, tab, **kwargs)
-        newTab.prop_parts = self.filter._prop_parts
-        return newTab, cost
+        self._prob_surv_args = prob_surv_args
+        return super().predict(timestep, **kwargs)
 
-    def correct_prob_density(self, meas, probDensity, **kwargs):
-        """ This corrects the probability density and resamples.
-
-
-        Args:
-            meas (numpy array): Measurement vector as a 2D numpy array
-            probDensity (:py:mod:`gasur.utilities.distributions`): Probability
-                distribution to use for prediction
-            **kwargs (dict): Passed through to the filters correct function.
-
-        Returns:
-            tuple containing
-
-                - (:py:mod:`gasur.utilities.distributions`): Corrected
-                and resampledprobability distribution.
-                - (float): Sum of the unnormalized weights
-        """
+    def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
+        """Corrects the probability density and resamples."""
         self.filter.init_from_dist(deepcopy(probDensity))
 
-        likelihood, inds_removed = self.filter.correct(meas, selection=False,
-                                                       **kwargs)[1:3]
+        likelihood, inds_removed = self.filter.correct(timestep, meas, selection=False,
+                                                       **filt_args)[1:3]
         newProbDen = self.filter.extract_dist()
 
-        pd = self.compute_prob_detection(probDensity.particles, **kwargs)
+        pd = self.compute_prob_detection(probDensity.particles, *self._prob_det_args)
         if all(np.abs(newProbDen.weights) == np.inf):
             new_weights = np.inf * np.ones(len(newProbDen.weights))
         else:
@@ -2355,105 +2535,159 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         newProbDen.update_weights(new_weights)
         self.filter.init_from_dist(newProbDen)
-        self.filter._selection(**kwargs)
+        self.filter._selection(self._rng)
         newProbDen = self.filter.extract_dist()
 
         return newProbDen, tot
 
-    def extract_states(self, **kwargs):
-        """ Extracts the best state estimates.
+    def _correct_track_tab_entry(self, meas, tab, timestep, filt_args):
+        if len(tab.prop_parts) == 0:
+            # assume this is a new birth and prob_parts hasn't been initialized
+            prop_parts = deepcopy(tab.probDensity.particles)
+        else:
+            prop_parts = deepcopy(tab.prop_parts)
+        self.filter._prop_parts = prop_parts
+        newTab, cost = super()._correct_track_tab_entry(meas, tab, timestep,
+                                                        filt_args)
+        newTab.prop_parts = self.filter._prop_parts
+        return newTab, cost
 
-        This extracts the best states from the distribution. It should be
-        called once per time step after the correction function. This calls
-        both the inner filters predict and correct functions so the keyword
-        arguments must contain any additional variables needed by those
-        functions.
+    def _calc_avg_prob_det_mdet(self):
+        avg_prob_detect = np.zeros(len(self._track_tab))
+        for tabidx, ent in enumerate(self._track_tab):
+            p_detect = self.compute_prob_detection(ent.probDensity.particles,
+                                                   *self._prob_det_args)
+            avg_prob_detect[tabidx] = np.sum(np.array(ent.probDensity.weights)
+                                             * p_detect)
 
-        Returns:
-            idx_cmp (int): Index of the hypothesis table used when extracting
-                states
+        avg_prob_miss_detect = 1 - avg_prob_detect
+
+        return avg_prob_detect, avg_prob_miss_detect
+
+    def correct(self, timestep, meas, prob_det_args=(), rng=rnd.default_rng(),
+                **kwargs):
+        """Correction step of the SMC-GLMB filter.
+
+        This is a wrapper for the parent class to allow for extra parameters.
+        See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.correct` for
+        additional details.
+
+        Parameters
+        ----------
+        timestep : float
+            Current timestep.
+        prob_det_args : tuple, optional
+            Additional arguments for the `compute_prob_detection` function.
+            The default is ().
+        rng : numpy.random generator, optional
+            Random generator for the selection stage. The default is
+            numpy.random.default_rng().
+        **kwargs : dict, optional
+            See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.correct`
         """
+        self._prob_det_args = prob_det_args
+        self._rng = rng
+        return super().correct(timestep, meas, **kwargs)
 
-        card = np.argmax(self._card_dist)
-        tracks_per_hyp = np.array([x.num_tracks for x in self._hypotheses])
-        weight_per_hyp = np.array([x.assoc_prob for x in self._hypotheses])
+    def _extract_helper(self, pd, b_time, b_idx):
+        new_state = pd.mean
+        new_cov = pd.covariance
+        new_label = (b_time, b_idx)
 
-        if len(tracks_per_hyp) == 0:
-            self._states = [[]]
-            self._labels = [[]]
-            self._covs = [[]]
-            return None
+        return new_state, new_cov, new_label
 
-        idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
-        meas_hists = []
-        labels = []
-        for ptr in self._hypotheses[idx_cmp].track_set:
-            meas_hists.append(self._track_tab[ptr].meas_assoc_hist.copy())
-            labels.append(self._track_tab[ptr].label)
+    def extract_states(self, prob_surv_args=(), prob_det_args=(),
+                       rng=rnd.default_rng(), **kwargs):
+        """Extracts the state estimates.
 
-        print(labels)
+        This is a wrapper for the parent method to allow for extra arguments.
+        See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
+        for details.
 
-        both = set(self._lab_mem).intersection(labels)
-        surv_ii = [labels.index(x) for x in both]
-        either = set(self._lab_mem).symmetric_difference(labels)
-        dead_ii = [self._lab_mem.index(a) for a in either
-                   if a in self._lab_mem]
-        new_ii = [labels.index(a) for a in either if a in labels]
+        Parameters
+        ----------
+        prob_surv_args : tuple, optional
+            Additional arguments for the `compute_prob_survive` function.
+            The default is ().
+        prob_det_args : tuple, optional
+            Additional arguments for the `compute_prob_detection` function.
+            The default is ().
+        rng : numpy.random generator, optional
+            Random generator for the selection stage. The default is
+            numpy.random.default_rng().
+        **kwargs : dict, optional
+            See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
 
-        self._lab_mem = [self._lab_mem[ii] for ii in dead_ii] \
-            + [labels[ii] for ii in surv_ii] \
-            + [labels[ii] for ii in new_ii]
-        self._meas_asoc_mem = [self._meas_asoc_mem[ii] for ii in dead_ii] \
-            + [meas_hists[ii] for ii in surv_ii] \
-            + [meas_hists[ii] for ii in new_ii]
+        """
+        self._prob_surv_args = prob_surv_args
+        self._prob_det_args = prob_det_args
+        self._rng = rng
+        return super().extract_states(**kwargs)
 
-        self._states = [None] * len(self._meas_tab)
-        self._labels = [None] * len(self._meas_tab)
-        if self.save_covs:
-            self._covs = [None] * len(self._meas_tab)
+    def extract_most_prob_states(self, thresh, **kwargs):
+        """Extracts themost probable states.
 
-        # if there are no old or new tracks assume its the first iteration
-        if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
-            self._states = [[]]
-            self._labels = [[]]
-            self._covs = [[]]
-            return None
+        .. todo::
+            Implement this function for the SMC-GLMB filter
 
-        for (hist, (b_time, b_idx)) in zip(self._meas_asoc_mem, self._lab_mem):
-            pd = deepcopy(self.birth_terms[b_idx][0])
+        Raises
+        ------
+            Function must be implemented.
+        """
+        raise RuntimeWarning('Not implemented for this class')
 
-            for (t_after_b, emm) in enumerate(hist):
-                # propagate for GM
-                pd = self.predict_prob_density(pd, **kwargs)
-                # self.filter.plot_particles([0, 2], title='predict')
+    def cleanup(self, enable_prune=True, enable_cap=True, enable_extract=True,
+                prob_surv_args=(), prob_det_args=(), rng=rnd.default_rng(),
+                pred_args={}, cor_args={}):
+        """Performs the cleanup step of the filter.
 
-                # measurement correction for GM
-                tt = b_time + t_after_b
-                if emm is not None:
-                    meas = self._meas_tab[tt][emm].copy()
-                    # self.filter.plot_weighted_particles(0)
-                    # self.filter.plot_weighted_particles(2)
-                    pd = self.correct_prob_density(meas, pd, **kwargs)[0]
-                    # self.filter.plot_particles([0, 2], title='correct')
-                    # self.filter.plot_weighted_particles(0)
-                    # self.filter.plot_weighted_particles(2)
+        This can prune, cap, and extract states. It must be called once per
+        timestep, even if all three functions are disabled. This is to ensure
+        that internal counters for tracking linear timestep indices are properly
+        incremented. If this is called with `enable_extract` set to true then
+        the extract states method does not need to be called separately. It is
+        recommended to call this function instead of
+        :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
+        directly.
 
-                # find best one and add to state table
-                new_state = pd.mean
-                new_cov = pd.covariance
-                new_label = (b_time, b_idx)
-                if self._labels[tt] is None:
-                    self._states[tt] = [new_state]
-                    self._labels[tt] = [new_label]
-                    if self.save_covs:
-                        self._covs[tt] = [new_cov]
-                else:
-                    self._states[tt].append(new_state)
-                    self._labels[tt].append(new_label)
-                    if self.save_covs:
-                        self._covs[tt].append(new_cov)
-        return idx_cmp
+        Parameters
+        ----------
+        enable_prune : bool, optional
+            Flag indicating if prunning should be performed. The default is True.
+        enable_cap : bool, optional
+            Flag indicating if capping should be performed. The default is True.
+        enable_extract : bool, optional
+            Flag indicating if state extraction should be performed. The default is True.
+        prob_surv_args : tuple, optional
+            Additional arguments for the `compute_prob_survive` function.
+            The default is ().
+        prob_det_args : tuple, optional
+            Additional arguments for the `compute_prob_detection` function.
+            The default is ().
+        rng : numpy.random generator, optional
+            Random generator for the selection stage. The default is
+            numpy.random.default_rng().
+        pred_args : dict, optional
+            Additional arguments to pass to the inner filter's prediction
+            function. The default is {}. Only used if extracting states.
+        cor_args : dict, optional
+            Additional arguments to pass to the inner filter's correction
+            function. The default is {}. Only used if extracting states.
 
-    def _gate_meas(self, meas, means, covs, **kwargs):
-        warn('Mesurement gating not yet implemented for SMC-GLMB')
-        return meas
+        Returns
+        -------
+        None.
+
+        """
+        if enable_prune:
+            self._prune()
+
+        if enable_cap:
+            self._cap()
+
+        if enable_extract:
+            self.extract_states(prob_surv_args=prob_surv_args,
+                                prob_det_args=prob_det_args, rng=rng,
+                                pred_args=pred_args, cor_args=cor_args)
+
+        self._time_index_cntr += 1

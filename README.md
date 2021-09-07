@@ -51,6 +51,14 @@ The HTML version of the docs can be built using the following command:
 Then they can be viewed by opening **docs/build/html/index.html**
 
 
+## Notes about tox
+If tox is failing to install the dependencies due to an error in distutils, then it may be required to instal distutils seperately by
+
+`sudo apt install python3.7-distutils`
+
+for a debian based system.
+
+
 # Cite
 Please cite the framework as follows
 

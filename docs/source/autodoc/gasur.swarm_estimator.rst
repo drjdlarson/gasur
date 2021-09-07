@@ -14,3 +14,4 @@ Submodules
 
    gasur.swarm_estimator.slam
    gasur.swarm_estimator.tracker
+   gasur.swarm_estimator.tracker2

@@ -16,3 +16,4 @@ Submodules
    gasur.utilities.graphs
    gasur.utilities.graphs_subroutines
    gasur.utilities.plotting
+   gasur.utilities.sampling
