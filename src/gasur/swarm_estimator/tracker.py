@@ -13,9 +13,9 @@ import abc
 from copy import deepcopy
 from warnings import warn
 
-from gncpy.math import log_sum_exp, get_elem_sym_fnc
 from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
+from gncpy.math import log_sum_exp, get_elem_sym_fnc
 import gncpy.plotting as pltUtil
 
 
@@ -530,7 +530,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
         Keyword arguments are processed with
-        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        :meth:`gncpy.plotting.init_plotting_opts`. This function
         implements
 
             - f_hndl
@@ -718,7 +718,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             The default is None.
         **kwargs : dict, optional
             Standard plotting options for
-            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            :meth:`gncpy.plotting.init_plotting_opts`. This function
             implements
 
                 - f_hndl
@@ -1145,7 +1145,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         ----------
         **kwargs : dict, optional
             Keyword arguments are processed with
-            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            :meth:`gncpy.plotting.init_plotting_opts`. This function
             implements
 
                 - f_hndl
@@ -1193,7 +1193,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             List of the true cardinality at each time
         **kwargs : dict, optional
             Keyword arguments are processed with
-            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            :meth:`gncpy.plotting.init_plotting_opts`. This function
             implements
 
                 - f_hndl
@@ -1275,7 +1275,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         ----------
         **kwargs : dict, optional
             Keyword arguments are processed with
-            :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+            :meth:`gncpy.plotting.init_plotting_opts`. This function
             implements
 
                 - f_hndl
@@ -1336,7 +1336,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         Determines if measurements are gated
     birth_terms :list
         List of tuples where the first element is a
-        :py:class:`gasur.utilities.distributions.GaussianMixture` and
+        :py:class:`gncpy.distributions.GaussianMixture` and
         the second is the birth probability for that term
     prune_threshold : float
         Minimum association probability to keep when pruning
@@ -1673,9 +1673,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     def _gen_cor_tab(self, num_meas, meas, timestep, filt_args):
         num_pred = len(self._track_tab)
-        up_tab = []
-        for ii in range(0, (num_meas + 1) * num_pred):
-            up_tab.append(self._TabEntry())
+        up_tab = [None] * (num_meas + 1) * num_pred
 
         for ii, track in enumerate(self._track_tab):
             up_tab[ii] = deepcopy(track)
@@ -1690,7 +1688,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     self._correct_track_tab_entry(z, ent, timestep, filt_args)
 
                 # update association history with current measurement index
-                up_tab[s_to_ii].meas_assoc_hist += [emm]
+                up_tab[s_to_ii].meas_assoc_hist.append(emm)
                 all_cost_m[ii, emm] = cost
         return up_tab, all_cost_m
 
@@ -1871,7 +1869,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         return new_state, new_cov, new_label
 
-    def extract_states(self, pred_args={}, cor_args={}):
+    def extract_states(self, pred_args={}, cor_args={}, update=True,
+                       calc_states=True):
         """Extracts the best state estimates.
 
         This extracts the best states from the distribution. It should be
@@ -1888,6 +1887,15 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         cor_args : dict, optional
             Additional arguments to pass to the inner filters correction
             function. The default is {}.
+        update : bool, optional
+            Flag indicating if the label history should be updated. This should
+            be done once per timestep and can be disabled if calculating states
+            after the final timestep. The default is True.
+        calc_states : bool, optional
+            Flag indicating if the states should be calculated based on the
+            label history. This only needs to be done before the states are used.
+            It can simply be called once after the end of the simulation. The
+            default is true.
 
         .. todo::
             Improve the history tracking so it is not as convoluted and does
@@ -1910,48 +1918,53 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             return None
 
         idx_cmp = np.argmax(weight_per_hyp * (tracks_per_hyp == card))
-        self._update_extract_hist(idx_cmp)
+        if update:
+            self._update_extract_hist(idx_cmp)
 
-        self._states = [None] * len(self._meas_tab)
-        self._labels = [None] * len(self._meas_tab)
-        if self.save_covs:
-            self._covs = [None] * len(self._meas_tab)
+        if calc_states:
+            self._states = [None] * len(self._meas_tab)
+            self._labels = [None] * len(self._meas_tab)
+            if self.save_covs:
+                self._covs = [None] * len(self._meas_tab)
 
-        # if there are no old or new tracks assume its the first iteration
-        if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
-            self._states = [[]]
-            self._labels = [[]]
-            self._covs = [[]]
-            return None
+            # if there are no old or new tracks assume its the first iteration
+            if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
+                self._states = [[]]
+                self._labels = [[]]
+                self._covs = [[]]
+                return None
 
-        for (hist, (b_time, b_idx, b_t_ind)) in zip(self._meas_asoc_mem, self._lab_mem):
-            pd = deepcopy(self.birth_terms[b_idx][0])
+            for (hist, (b_time, b_idx, b_t_ind)) in zip(self._meas_asoc_mem, self._lab_mem):
+                pd = deepcopy(self.birth_terms[b_idx][0])
 
-            for (t_after_b, emm) in enumerate(hist):
-                timestep = b_time + t_after_b
-                # propagate for GM
-                pd = self._predict_prob_density(timestep, pd, pred_args)
+                for (t_after_b, emm) in enumerate(hist):
+                    timestep = b_time + t_after_b
+                    # propagate for GM
+                    pd = self._predict_prob_density(timestep, pd, pred_args)
 
-                # measurement correction for GM
-                tt = b_t_ind + t_after_b
-                if emm is not None:
-                    meas = self._meas_tab[tt][emm].copy()
-                    pd = self._correct_prob_density(timestep, meas, pd, cor_args)[0]
+                    # measurement correction for GM
+                    tt = b_t_ind + t_after_b
+                    if emm is not None:
+                        meas = self._meas_tab[tt][emm].copy()
+                        pd = self._correct_prob_density(timestep, meas, pd, cor_args)[0]
 
-                # find best one and add to state table
-                new_state, new_cov, new_label = self._extract_helper(pd,
-                                                                     b_time,
-                                                                     b_idx)
-                if self._labels[tt] is None:
-                    self._states[tt] = [new_state]
-                    self._labels[tt] = [new_label]
-                    if self.save_covs:
-                        self._covs[tt] = [new_cov]
-                else:
-                    self._states[tt].append(new_state)
-                    self._labels[tt].append(new_label)
-                    if self.save_covs:
-                        self._covs[tt].append(new_cov)
+                    # find best one and add to state table
+                    new_state, new_cov, new_label = self._extract_helper(pd,
+                                                                         b_time,
+                                                                         b_idx)
+                    if self._labels[tt] is None:
+                        self._states[tt] = [new_state]
+                        self._labels[tt] = [new_label]
+                        if self.save_covs:
+                            self._covs[tt] = [new_cov]
+                    else:
+                        self._states[tt].append(new_state)
+                        self._labels[tt].append(new_label)
+                        if self.save_covs:
+                            self._covs[tt].append(new_cov)
+
+        if not update and not calc_states:
+            warn('Extracting states performed no actions')
 
         return idx_cmp
 
@@ -2078,7 +2091,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._card_dist = self._calc_card_dist(self._hypotheses)
 
     def cleanup(self, enable_prune=True, enable_cap=True, enable_extract=True,
-                pred_args={}, cor_args={}):
+                extract_kwargs={}):
         """Performs the cleanup step of the filter.
 
         This can prune, cap, and extract states. It must be called once per
@@ -2117,7 +2130,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._cap()
 
         if enable_extract:
-            self.extract_states(pred_args=pred_args, cor_args=cor_args)
+            self.extract_states(**extract_kwargs)
 
         self._time_index_cntr += 1
 
@@ -2129,7 +2142,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         are calculated according to :cite:`Hoover1984_AlgorithmsforConfidenceCirclesandEllipses`
 
         Keywrod arguments are processed with
-        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        :meth:`gncpy.plotting.init_plotting_opts`. This function
         implements
 
             - f_hndl
@@ -2316,7 +2329,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         the class.
 
         Keywrod arguments are processed with
-        :meth:`gasur.utilities.plotting.init_plotting_opts`. This function
+        :meth:`gncpy.plotting.init_plotting_opts`. This function
         implements
 
             - f_hndl
@@ -2420,19 +2433,20 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
 
 class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """ This implements a Sequential Monte Carlo GLMB filter.
+    """Implementation of a Sequential Monte Carlo GLMB filter.
 
     This is based on :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
     It does not account for agents spawned from existing tracks, only agents
     birthed from the given birth model.
 
-    Attributes:
-        compute_prob_detection (function): Must take a likst of particles as
-            the first argument and kwargs as the next. Returns the average
-            probability of detection for the list of particles
-        compute_prob_survive (function): Must take a likst of particles as
-            the first argument and kwargs as the next. Returns the average
-            probability of survival for the list of particles
+    Attributes
+    ----------
+    compute_prob_detection : callable
+        Function that takes a list of particles as the first argument and `*args`
+        as the next. Returns the probability of detection for each particle as a list.
+    compute_prob_survive : callable
+        Function that takes a list of particles as the first argument and `*args` as
+        the next. Returns the average probability of survival for each particle as a list.
     """
 
     # inherit from parents local class to extend it
@@ -2514,11 +2528,11 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
         """Corrects the probability density and resamples."""
-        self.filter.init_from_dist(deepcopy(probDensity))
+        self.filter.init_from_dist(probDensity)
 
         likelihood, inds_removed = self.filter.correct(timestep, meas, selection=False,
                                                        **filt_args)[1:3]
-        newProbDen = self.filter.extract_dist()
+        newProbDen = self.filter.extract_dist(make_copy=False)
 
         pd = self.compute_prob_detection(probDensity.particles, *self._prob_det_args)
         if all(np.abs(newProbDen.weights) == np.inf):
@@ -2528,15 +2542,15 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                            * np.array(newProbDen.weights))
         tot = sum(new_weights)
         if tot > 0 and np.abs(tot) != np.inf:
-            new_weights = [w / tot for w in new_weights]
+            new_weights = (new_weights / tot).tolist()
         else:
             new_weights = [np.inf] * len(new_weights)
             tot = np.inf  # division by 0 would give inf
 
         newProbDen.update_weights(new_weights)
-        self.filter.init_from_dist(newProbDen)
+        self.filter.init_from_dist(newProbDen, make_copy=False)
         self.filter._selection(self._rng)
-        newProbDen = self.filter.extract_dist()
+        newProbDen = self.filter.extract_dist(make_copy=False)
 
         return newProbDen, tot
 
@@ -2632,62 +2646,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         Raises
         ------
+        RuntimeWarning
             Function must be implemented.
         """
-        raise RuntimeWarning('Not implemented for this class')
-
-    def cleanup(self, enable_prune=True, enable_cap=True, enable_extract=True,
-                prob_surv_args=(), prob_det_args=(), rng=rnd.default_rng(),
-                pred_args={}, cor_args={}):
-        """Performs the cleanup step of the filter.
-
-        This can prune, cap, and extract states. It must be called once per
-        timestep, even if all three functions are disabled. This is to ensure
-        that internal counters for tracking linear timestep indices are properly
-        incremented. If this is called with `enable_extract` set to true then
-        the extract states method does not need to be called separately. It is
-        recommended to call this function instead of
-        :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
-        directly.
-
-        Parameters
-        ----------
-        enable_prune : bool, optional
-            Flag indicating if prunning should be performed. The default is True.
-        enable_cap : bool, optional
-            Flag indicating if capping should be performed. The default is True.
-        enable_extract : bool, optional
-            Flag indicating if state extraction should be performed. The default is True.
-        prob_surv_args : tuple, optional
-            Additional arguments for the `compute_prob_survive` function.
-            The default is ().
-        prob_det_args : tuple, optional
-            Additional arguments for the `compute_prob_detection` function.
-            The default is ().
-        rng : numpy.random generator, optional
-            Random generator for the selection stage. The default is
-            numpy.random.default_rng().
-        pred_args : dict, optional
-            Additional arguments to pass to the inner filter's prediction
-            function. The default is {}. Only used if extracting states.
-        cor_args : dict, optional
-            Additional arguments to pass to the inner filter's correction
-            function. The default is {}. Only used if extracting states.
-
-        Returns
-        -------
-        None.
-
-        """
-        if enable_prune:
-            self._prune()
-
-        if enable_cap:
-            self._cap()
-
-        if enable_extract:
-            self.extract_states(prob_surv_args=prob_surv_args,
-                                prob_det_args=prob_det_args, rng=rng,
-                                pred_args=pred_args, cor_args=cor_args)
-
-        self._time_index_cntr += 1
+        warn('Not implemented for this class')
