@@ -241,11 +241,11 @@ def test_PHD():  # noqa
         phd.correct(tt, meas_in, meas_mat_args={}, est_meas_args={},
                     filt_args=filt_args)
 
-        phd.prune()
-        phd.merge()
-        phd.cap()
-
-        phd.extract_states()
+        phd.cleanup()
+        # phd.prune()
+        # phd.merge()
+        # phd.cap()
+        # phd.extract_states()
 
     if debug_plots:
         phd.plot_states([0, 1])
@@ -286,11 +286,11 @@ def test_CPHD():  # noqa
         phd.correct(tt, meas_in, meas_mat_args={}, est_meas_args={},
                     filt_args=filt_args)
 
-        phd.prune()
-        phd.merge()
-        phd.cap()
-
-        phd.extract_states()
+        phd.cleanup()
+        # phd.prune()
+        # phd.merge()
+        # phd.cap()
+        # phd.extract_states()
 
     if debug_plots:
         phd.plot_card_time_hist(time_vec=time)

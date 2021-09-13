@@ -72,18 +72,38 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         return len(self.birth_terms)
 
     @abc.abstractmethod
-    def predict(self, **kwargs):
-        """Abstract method for the prediction step."""
+    def predict(self, t, **kwargs):
+        """Abstract method for the prediction step.
+
+        This must be overridden in the inherited class. It is recommended to
+        keep the same structure/order for the arguments for consistency
+        between the inherited classes.
+        """
         pass
 
     @abc.abstractmethod
-    def correct(self, **kwargs):
-        """Abstract method for the correction step."""
+    def correct(self, t, m, **kwargs):
+        """Abstract method for the correction step.
+
+        This must be overridden in the inherited class. It is recommended to
+        keep the same structure/order for the arguments for consistency
+        between the inherited classes.
+        """
         pass
 
     @abc.abstractmethod
     def extract_states(self, **kwargs):
         """Abstract method for extracting states."""
+        pass
+
+    @abc.abstractmethod
+    def cleanup(self, **kwargs):
+        """Abstract method that performs the cleanup step of the filter.
+
+        This must be overridden in the inherited class. It is recommended to
+        keep the same structure/order for the arguments for consistency
+        between the inherited classes.
+        """
         pass
 
     def _gate_meas(self, meas, means, covs, meas_mat_args={},
@@ -387,7 +407,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
 
         return gm
 
-    def prune(self):
+    def _prune(self):
         """Removes hypotheses below a threshold.
 
         This should be called once per time step after the correction and
@@ -401,7 +421,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             del self._gaussMix.weights[index]
             del self._gaussMix.covariances[index]
 
-    def merge(self):
+    def _merge(self):
         """Merges nearby hypotheses."""
         loop_inds = set(range(0, len(self._gaussMix.means)))
 
@@ -437,7 +457,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self._gaussMix.means = m_lst
         self._gaussMix.covariances = p_lst
 
-    def cap(self):
+    def _cap(self):
         """Removes least likely hypotheses until a maximum number is reached.
 
         This should be called once per time step after pruning and
@@ -472,6 +492,45 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self._states.append(s_lst)
         if self.save_covs:
             self._covs.append(c_lst)
+
+    def cleanup(self, enable_prune=True, enable_cap=True, enable_merge=True,
+                enable_extract=True):
+        """Performs the cleanup step of the filter.
+
+        This can prune, cap, and extract states. It must be called once per
+        timestep. If this is called with `enable_extract` set to true then
+        the extract states method does not need to be called separately. It is
+        recommended to call this function instead of
+        :meth:`gasur.swarm_estimator.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
+        directly.
+
+        Parameters
+        ----------
+        enable_prune : bool, optional
+            Flag indicating if prunning should be performed. The default is True.
+        enable_cap : bool, optional
+            Flag indicating if capping should be performed. The default is True.
+        enable_merge : bool, optional
+            Flag indicating if merging should be performed. The default is True.
+        enable_extract : bool, optional
+            Flag indicating if state extraction should be performed. The default is True.
+
+        Returns
+        -------
+        None.
+
+        """
+        if enable_prune:
+            self._prune()
+
+        if enable_merge:
+            self._merge()
+
+        if enable_cap:
+            self._cap()
+
+        if enable_extract:
+            self.extract_states()
 
     def __ani_state_plotting(self, f_hndl, tt, states, show_sig, plt_inds, sig_bnd,
                              color, marker, state_lbl, added_sig_lbl,
