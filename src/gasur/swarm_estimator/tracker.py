@@ -2327,7 +2327,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                                 color=color)
 
         # if true states are available then plot them
-        if true_states is not None:
+        if true_states is not None and any([len(x) > 0 for x in true_states]):
             if x_dim is None:
                 for states in true_states:
                     if len(states) > 0:
@@ -2363,13 +2363,14 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             color = (128 / 255, 128 / 255, 128 / 255)
             meas_x = np.asarray(meas_x)
             meas_y = np.asarray(meas_y)
-            if not added_meas_lbl:
-                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
-                                       color=color, marker='^',
-                                       label='Measurements')
-            else:
-                f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
-                                       color=color, marker='^')
+            if meas_x.size > 0:
+                if not added_meas_lbl:
+                    f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                           color=color, marker='^',
+                                           label='Measurements')
+                else:
+                    f_hndl.axes[0].scatter(meas_x, meas_y, zorder=-1, alpha=0.35,
+                                           color=color, marker='^')
 
         f_hndl.axes[0].grid(True)
         pltUtil.set_title_label(f_hndl, 0, opts,
