@@ -10,11 +10,15 @@ Welcome to GASUR's documentation!
    :maxdepth: 2
    :caption: Contents:
 
-   autodoc/modules
+   api
    toolchain
    References
    license
 
+   
+Todos
+-----
+.. todolist::
 
 
 Indices and tables
