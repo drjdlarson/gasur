@@ -5,6 +5,8 @@ Other distributions can be found in GNCPy.
 """
 import numpy as np
 from numpy.linalg import det
+import numpy.random as rnd
+import scipy.stats as stats
 
 from gncpy.math import gamma_fnc
 
@@ -22,10 +24,54 @@ class GaussianMixture:
         List of Gaussian weights, no automatic normalization
     """
 
-    def __init__(self, **kwargs):
-        self.means = kwargs.get('means', [])
-        self.covariances = kwargs.get('covariances', [])
-        self.weights = kwargs.get('weights', [])
+    def __init__(self, means=None, covariances=None, weights=None):
+        if means is None:
+            means = []
+        if covariances is None:
+            covariances = []
+        if weights is None:
+            weights = []
+        self.means = means
+        self.covariances = covariances
+        self.weights = weights
+
+    def sample(self, rng=None):
+        """Draw a sample from the current mixture model.
+
+        Parameters
+        ----------
+        rng : numpy random generator, optional
+            Random number generator to use. If none is given then the numpy
+            default is used. The default is None.
+
+        Returns
+        -------
+        numpy array
+            randomly sampled numpy array of the same shape as the mean.
+        """
+        if rng is None:
+            rng = rnd.default_rng()
+        mix_ind = rng.choice(np.arange(len(self.means), dtype=int),
+                             p=self.weights)
+        x = rng.multivariate_normal(self.means[mix_ind].flatten(),
+                                    self.covariances[mix_ind])
+        return x.reshape(self.means[mix_ind].shape)
+
+    def pdf(self, x):
+        """Multi-variate probability density function for this mixture.
+
+        Returns
+        -------
+        float
+            PDF value of the state `x`.
+        """
+        rv = stats.multivariate_normal()
+        flat_x = x.flatten()
+        p = 0
+        for m, s, w in zip(self.means, self.covariances, self.weights):
+            p += w * rv.pdf(flat_x, mean=m.flatten(), cov=s)
+
+        return p
 
 
 class StudentsTMixture:
@@ -43,11 +89,17 @@ class StudentsTMixture:
         Degrees of freedom for the Students T distribution
     """
 
-    def __init__(self, **kwargs):
-        self.means = kwargs.get('means', [])
-        self.scalings = kwargs.get('scalings', [])
-        self.weights = kwargs.get('weights', [])
-        self.dof = kwargs.get('dof', 3)
+    def __init__(self, means=None, scalings=None, weights=None, dof=3):
+        if means is None:
+            means = []
+        if scalings is None:
+            scalings = []
+        if weights is None:
+            weights = []
+        self.means = means
+        self.scalings = scalings
+        self.weights = weights
+        self.dof = dof
 
     @property
     def covariances(self):
@@ -58,34 +110,52 @@ class StudentsTMixture:
         scale = self.dof / (self.dof - 2)
         return [scale * x for x in self.scalings]
 
-    @classmethod
-    def pdf(x, mu, sig, v):
-        """Multi-variate probability density function for the distribution.
-
-        This does not need to be called from a class instance.
-
-        .. todo::
-            Allow the STM pdf method to work on mixtures
+    def pdf(self, x):
+        """Multi-variate probability density function for this mixture.
 
         Parameters
         ----------
         x : N x 1 numpy array
-            Variable to evaluate the PDF at.
-        mu : N x 1 numpy array
-            Mean of the distribution.
-        sig : N x N numpy array
-            Scale matrix for the distribution.
-        v : int
-            Degree of freedom for the distribution, must be >2.
+            Value to evaluate the pdf at.
 
         Returns
         -------
         float
             PDF value of the state `x`.
         """
-        d = x.size()
-        del2 = (x - mu).T @ sig @ (x - mu)
-        inv_det = 1 / np.sqrt(det(sig))
-        gam_rat = gamma_fnc((v + 2) / 2) / gamma_fnc(v / 2)
-        return gam_rat / (v * np.pi)**(d / 2) * inv_det \
-            * (1 + del2 / v)**(-(v + 2) / 2)
+        rv = stats.multivariate_t()
+        flat_x = x.flatten()
+        p = 0
+        for m, s, w in zip(self.means, self.scalings, self.weights):
+            p += w * rv.pdf(flat_x, loc=m.flatten(), shape=s, df=self.dof)
+
+        return p
+
+    def sample(self, rng=None):
+        """Multi-variate probability density function for this mixture.
+
+        Parameters
+        ----------
+        rng : numpy random generator, optional
+            Random number generator to use. If none is given then the numpy
+            default is used. The default is None.
+
+        Returns
+        -------
+        float
+            PDF value of the state `x`.
+        """
+        if rng is None:
+            rng = rnd.default_rng()
+
+        rv = stats.multivariate_t(random_state=rng)
+        mix_ind = rng.choice(np.arange(len(self.means), dtype=int),
+                             p=self.weights)
+        if isinstance(self.dof, list):
+            df = self.dof[mix_ind]
+        else:
+            df = self.dof
+        x = rv.rvs(loc=self.means[mix_ind].flatten(),
+                   shape=self.scalings[mix_ind], df=df)
+
+        return x.reshape(self.means[mix_ind].shape)

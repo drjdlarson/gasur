@@ -43,7 +43,9 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
     """
 
     def __init__(self, in_filter=None, prob_detection=1, prob_survive=1,
-                 birth_terms=[], clutter_rate=0, clutter_den=0, **kwargs):
+                 birth_terms=None, clutter_rate=0, clutter_den=0, **kwargs):
+        if birth_terms is None:
+            birth_terms = []
         self.filter = deepcopy(in_filter)
         self.prob_detection = prob_detection
         self.prob_survive = prob_survive
@@ -914,7 +916,9 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
         number of agents per state. The default is [].
     """
 
-    def __init__(self, agents_per_state=[], max_expected_card=10, **kwargs):
+    def __init__(self, agents_per_state=None, max_expected_card=10, **kwargs):
+        if agents_per_state is None:
+            agents_per_state = []
         self.agents_per_state = agents_per_state
         self._max_expected_card = max_expected_card
 
