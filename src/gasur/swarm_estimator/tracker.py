@@ -51,6 +51,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.prob_survive = prob_survive
         self.birth_terms = deepcopy(birth_terms)
         self.clutter_rate = clutter_rate
+        if isinstance(clutter_den, np.ndarray):
+            clutter_den = clutter_den.item()
         self.clutter_den = clutter_den
 
         self.inv_chi2_gate = 0
@@ -1985,10 +1987,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._update_extract_hist(idx_cmp)
 
         if calc_states:
-            self._states = [None] * len(self._meas_tab)
-            self._labels = [None] * len(self._meas_tab)
+            self._states = [[]] * len(self._meas_tab)
+            self._labels = [[]] * len(self._meas_tab)
             if self.save_covs:
-                self._covs = [None] * len(self._meas_tab)
+                self._covs = [[]] * len(self._meas_tab)
 
             # if there are no old or new tracks assume its the first iteration
             if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
@@ -2015,7 +2017,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     new_state, new_cov, new_label = self._extract_helper(pd,
                                                                          b_time,
                                                                          b_idx)
-                    if self._labels[tt] is None:
+                    if len(self._labels[tt]) == 0:
                         self._states[tt] = [new_state]
                         self._labels[tt] = [new_label]
                         if self.save_covs:
