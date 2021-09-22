@@ -6,6 +6,7 @@ for RFS tracking related algorithms.
 import numpy as np
 from numpy.linalg import cholesky, inv
 import numpy.random as rnd
+from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import matplotlib.animation as animation
@@ -38,12 +39,24 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         Density of clutter distribution
     inv_chi2_gate : float
         Chi squared threshold for gating the measurements
+    save_covs : bool
+        Save covariance matrix for each state during state extraction
     debug_plots : bool
         Saves data needed for extra debugging plots
+    ospa : numpy array
+        Calculated OSPA value for the given truth data. Must be manually updated
+        by a function call.
+    ospa_localization : numpy array
+        Calculated OSPA value for the given truth data. Must be manually updated
+        by a function call.
+    ospa_cardinality : numpy array
+        Calculated OSPA value for the given truth data. Must be manually updated
+        by a function call.
     """
 
     def __init__(self, in_filter=None, prob_detection=1, prob_survive=1,
-                 birth_terms=None, clutter_rate=0, clutter_den=0, **kwargs):
+                 birth_terms=None, clutter_rate=0, clutter_den=0,
+                 inv_chi2_gate=0, save_covs=False, debug_plots=False, **kwargs):
         if birth_terms is None:
             birth_terms = []
         self.filter = deepcopy(in_filter)
@@ -55,9 +68,19 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             clutter_den = clutter_den.item()
         self.clutter_den = clutter_den
 
-        self.inv_chi2_gate = 0
+        self.inv_chi2_gate = inv_chi2_gate
 
-        self.debug_plots = False
+        self.save_covs = save_covs
+        self.debug_plots = debug_plots
+
+        self.ospa = None
+        self.ospa_localization = None
+        self.ospa_cardinality = None
+
+        self._states = []  # local copy for internal modification
+        self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
+        self._covs = []  # local copy for internal modification
+
         super().__init__(**kwargs)
 
     @property
@@ -164,6 +187,129 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         valid.sort()
         return [meas[ii] for ii in valid]
 
+    def calculate_ospa(self, truth, c, p):
+        """Calculates the OSPA distance between the truth at all timesteps.
+
+        Notes
+        -----
+        This calculates the Optimal SubPattern Assignment metric for the
+        extracted states and the supplied truth point distributions. The
+        calculation is based on
+        :cite:`Schuhmacher2008_AConsistentMetricforPerformanceEvaluationofMultiObjectFilters`
+        with much of the math defined in
+        :cite:`Schuhmacher2008_ANewMetricbetweenDistributionsofPointProcesses`.
+        A value is calculated for each timestep available in the data.
+
+        Parameters
+        ----------
+        truth : list
+            Each element represents a timestep and is a list of N x 1 numpy array,
+            one per true agent in the swarm.
+        c : float
+            Distance cutoff for considering a point properly assigned. This
+            influences how cardinality errors are penalized. For :math:`p = 1`
+            it is the penalty given false point estimate.
+        p : int
+            The power of the distance term. Higher values penalize outliers
+            more.
+        """
+        num_timesteps = len(self._states)
+        self.ospa = np.nan * np.ones(num_timesteps)
+        self.ospa_localization = np.nan * np.ones(num_timesteps)
+        self.ospa_cardinality = np.nan * np.ones(num_timesteps)
+        for ii, (x_lst, y_lst) in enumerate(zip(self._states, truth)):
+            x_empty = x_lst is None or len(x_lst) == 0
+            y_empty = y_lst is None or len(y_lst) == 0
+
+            if x_empty and y_empty:
+                self.ospa[ii] = 0
+                self.ospa_localization[ii] = 0
+                self.ospa_cardinality[ii] = 0
+                continue
+
+            if x_empty or y_empty:
+                self.ospa[ii] = 0
+                self.ospa_localization[ii] = 0
+                self.ospa_cardinality[ii] = c
+                continue
+
+            # create row matrices of data
+            x = np.stack([vec.flatten() for vec in x_lst])
+            y = np.stack([vec.flatten() for vec in y_lst])
+
+            n = x.shape[0]
+            m = y.shape[0]
+
+            x_mat = np.tile(x, (m, 1))
+            # set y_mat to repeat each value of y n times in a row
+            y_mat = np.tile(y, (1, x.shape[0])).reshape((n * m, y.shape[1]))
+
+            # get distances and set cutoff
+            dists = np.sqrt(np.sum((x_mat - y_mat)**2, axis=1)).reshape((m, n))
+            dists = np.minimum(dists, c)**p
+
+            # use hungarian to find minimum distances for getting total cost
+            row_ind, col_ind = linear_sum_assignment(dists)
+            cost = dists[row_ind, col_ind].sum()
+
+            inv_max_card = 1 / np.max([n, m])
+            card_diff = np.abs(n - m)
+            inv_p = 1 / p
+            c_p = c**p
+            self.ospa[ii] = (inv_max_card * (c_p * card_diff + cost))**inv_p
+            self.ospa_localization[ii] = (inv_max_card * cost)**inv_p
+            self.ospa_cardinality[ii] = (inv_max_card * c_p * card_diff)**inv_p
+
+    def plot_ospa_history(self, time_units='index', time=None, **kwargs):
+        """Plots the OSPA history.
+
+        This requires that the OSPA has been calcualted by the approriate
+        function first.
+
+        Parameters
+        ----------
+        time_units : string, optional
+            Text representing the units of time in the plot. The default is
+            'index'.
+        time : numpy array, optional
+            Vector to use for the x-axis of the plot. If none is given then
+            vector indices are used. The default is None.
+        **kwargs : dict
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting.
+
+        Returns
+        -------
+        fig : matplotlib figure
+            Figure object the data was plotted on.
+        """
+        if self.ospa is None:
+            warn('OSPA must be calculated before plotting')
+            return
+
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        fig = opts['f_hndl']
+
+        if fig is None:
+            fig = plt.figure()
+            fig.add_subplot(1, 1, 1)
+
+        if time is None:
+            time = np.arange(self.ospa.size, dtype=int)
+
+        fig.axes[0].grid(True)
+        fig.axes[0].plot(time, self.ospa)
+
+        pltUtil.set_title_label(fig, 0, opts, ttl="OSPA Metric",
+                                x_lbl='Time ({})'.format(time_units),
+                                y_lbl="OSPA")
+        fig.tight_layout()
+
+        return fig
+
+
+
 
 class ProbabilityHypothesisDensity(RandomFiniteSetBase):
     """Implements the Probability Hypothesis Density filter.
@@ -185,32 +331,25 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
     extract_threshold : float
         threshold for extracting the state. The default is 0.5.
     prune_threshold : float
-        threshold for removing hypotheses. The default is 1*10**-5.
+        threshold for removing hypotheses. The default is 10**-5.
     merge_threshold : float
         threshold for merging hypotheses. The default is 4.
-    save_covs : bool
-        flag indicating if covariances should be saved. The default is
-        False.
     max_gauss : int
         max number of gaussians to use. The default is 100.
 
     """
 
     def __init__(self, gating_on=False, inv_chi2_gate=0, extract_threshold=0.5,
-                 prune_threshold=1 * 10**-5, merge_threshold=4, save_covs=False,
-                 max_gauss=100, **kwargs):
+                 prune_threshold=10**-5, merge_threshold=4, max_gauss=100,
+                 **kwargs):
         self.gating_on = gating_on
         self.inv_chi2_gate = inv_chi2_gate
         self.extract_threshold = extract_threshold
         self.prune_threshold = prune_threshold
         self.merge_threshold = merge_threshold
-        self.save_covs = save_covs
         self.max_gauss = max_gauss
 
         self._gaussMix = GaussianMixture()
-        self._states = []  # local copy for internal modification
-        self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
-        self._covs = []  # local copy for internal modification
 
         super().__init__(**kwargs)
 
@@ -1407,8 +1546,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         Minimum association probability to keep when pruning
     max_hyps : int
         Maximum number of hypotheses to keep when capping
-    save_covs : bool
-        Save covariance matrix for each state during state extraction
     """
 
     class _TabEntry:
@@ -1432,22 +1569,19 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     def __init__(self, req_births=None, req_surv=None, req_upd=None,
                  gating_on=False, prune_threshold=10**-15, max_hyps=3000,
-                 save_covs=False, **kwargs):
+                 **kwargs):
         self.req_births = req_births
         self.req_surv = req_surv
         self.req_upd = req_upd
         self.gating_on = gating_on
         self.prune_threshold = prune_threshold
         self.max_hyps = max_hyps
-        self.save_covs = save_covs
+
 
         self._track_tab = []  # list of all possible tracks
-        self._states = []  # local copy for internal modification
         self._labels = []  # local copy for internal modification
-        self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._meas_asoc_mem = []
         self._lab_mem = []
-        self._covs = []  # local copy for internal modification
 
         hyp0 = self._HypothesisHelper()
         hyp0.assoc_prob = 1
