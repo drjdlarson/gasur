@@ -304,9 +304,11 @@ def test_PHD():  # noqa
 
     time = np.arange(t0, t1, dt)
     true_agents = []
+    global_true = []
     for kk, tt in enumerate(time):
 
         true_agents = _update_true_agents(true_agents, tt, dt, b_model, rng)
+        global_true.append(deepcopy(true_agents))
 
         filt_args = {'state_mat_args': state_mat_args}
         phd.predict(tt, filt_args=filt_args)
@@ -318,13 +320,14 @@ def test_PHD():  # noqa
                     filt_args=filt_args)
 
         phd.cleanup()
-        # phd.prune()
-        # phd.merge()
-        # phd.cap()
-        # phd.extract_states()
+
+    phd.calculate_ospa(global_true, 2, 1)
 
     if debug_plots:
         phd.plot_states([0, 1])
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    assert len(true_agents) == phd.cardinality, 'Wrong cardinality'
 
 
 def test_CPHD():  # noqa
@@ -349,9 +352,11 @@ def test_CPHD():  # noqa
 
     time = np.arange(t0, t1, dt)
     true_agents = []
+    global_true = []
     for kk, tt in enumerate(time):
 
         true_agents = _update_true_agents(true_agents, tt, dt, b_model, rng)
+        global_true.append(deepcopy(true_agents))
 
         filt_args = {'state_mat_args': state_mat_args}
         phd.predict(tt, filt_args=filt_args)
@@ -363,14 +368,15 @@ def test_CPHD():  # noqa
                     filt_args=filt_args)
 
         phd.cleanup()
-        # phd.prune()
-        # phd.merge()
-        # phd.cap()
-        # phd.extract_states()
+
+    phd.calculate_ospa(global_true, 2, 1)
 
     if debug_plots:
         phd.plot_card_time_hist(time_vec=time)
         phd.plot_states([0, 1])
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    assert len(true_agents) == phd.cardinality, 'Wrong cardinality'
 
 
 def test_GLMB():  # noqa
@@ -421,10 +427,14 @@ def test_GLMB():  # noqa
                       'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
+    glmb.calculate_ospa(global_true, 2, 1)
+
     if debug_plots:
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
+        glmb.plot_ospa_history()
+
     print('\tExpecting {} agents'.format(len(true_agents)))
 
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
