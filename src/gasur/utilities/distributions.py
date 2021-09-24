@@ -65,7 +65,7 @@ class GaussianMixture:
         float
             PDF value of the state `x`.
         """
-        rv = stats.multivariate_normal()
+        rv = stats.multivariate_normal
         flat_x = x.flatten()
         p = 0
         for m, s, w in zip(self.means, self.covariances, self.weights):
@@ -123,7 +123,7 @@ class StudentsTMixture:
         float
             PDF value of the state `x`.
         """
-        rv = stats.multivariate_t()
+        rv = stats.multivariate_t
         flat_x = x.flatten()
         p = 0
         for m, s, w in zip(self.means, self.scalings, self.weights):
@@ -148,7 +148,8 @@ class StudentsTMixture:
         if rng is None:
             rng = rnd.default_rng()
 
-        rv = stats.multivariate_t(random_state=rng)
+        rv = stats.multivariate_t
+        rv.random_state = rng
         mix_ind = rng.choice(np.arange(len(self.means), dtype=int),
                              p=self.weights)
         if isinstance(self.dof, list):
