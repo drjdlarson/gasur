@@ -433,6 +433,7 @@ def test_GLMB():  # noqa
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
         glmb.plot_ospa_history()
 
     print('\tExpecting {} agents'.format(len(true_agents)))
@@ -769,10 +770,10 @@ if __name__ == "__main__":
 
     debug_plots = True
 
-    test_PHD()
+    # test_PHD()
     # test_CPHD()
 
-    # test_GLMB()
+    test_GLMB()
     # test_STM_GLMB()
     # test_SMC_GLMB()
     # test_USMC_GLMB()

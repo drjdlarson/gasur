@@ -1546,6 +1546,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         Minimum association probability to keep when pruning
     max_hyps : int
         Maximum number of hypotheses to keep when capping
+    decimal_places : int
+        Number of decimal places to keep in label. The default is 2.
     """
 
     class _TabEntry:
@@ -1569,13 +1571,14 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     def __init__(self, req_births=None, req_surv=None, req_upd=None,
                  gating_on=False, prune_threshold=10**-15, max_hyps=3000,
-                 **kwargs):
+                 decimal_places=2, **kwargs):
         self.req_births = req_births
         self.req_surv = req_surv
         self.req_upd = req_upd
         self.gating_on = gating_on
         self.prune_threshold = prune_threshold
         self.max_hyps = max_hyps
+        self.decimal_places = decimal_places
 
 
         self._track_tab = []  # list of all possible tracks
@@ -1648,7 +1651,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             log_cost.append(-np.log(cost))
             entry = self._TabEntry()
             entry.probDensity = deepcopy(distrib)
-            entry.label = (timestep, ii)
+            entry.label = (round(timestep, self.decimal_places), ii)
             entry.time_index = self._time_index_cntr
             birth_tab.append(entry)
 
@@ -2451,14 +2454,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     e.set_facecolor(color)
                     f_hndl.axes[0].add_patch(e)
 
+            settings = {'color': color, 'markeredgecolor': 'k', 'marker': '.'}
             if not added_state_lbl:
-                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                       color=color, edgecolors='k',
-                                       label='States')
+                settings['label'] = 'States'
+                # f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
+                #                        color=color, edgecolors='k',
+                #                        label='States')
                 added_state_lbl = True
-            else:
-                f_hndl.axes[0].scatter(x[plt_inds[0], :], x[plt_inds[1], :],
-                                       color=color, edgecolors='k')
+            # else:
+            f_hndl.axes[0].plot(x[plt_inds[0], :], x[plt_inds[1], :],
+                                **settings)
 
             s = "({}, {})".format(lbl[0], lbl[1])
             tmp = x.copy()
@@ -2559,6 +2564,49 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         plt.tight_layout()
 
         return f_hndl
+
+    def plot_card_history(self, time_units='index', time=None, **kwargs):
+        """Plots the cardinality history.
+
+        Parameters
+        ----------
+        time_units : string, optional
+            Text representing the units of time in the plot. The default is
+            'index'.
+        time : numpy array, optional
+            Vector to use for the x-axis of the plot. If none is given then
+            vector indices are used. The default is None.
+        **kwargs : dict
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting.
+
+        Returns
+        -------
+        fig : matplotlib figure
+            Figure object the data was plotted on.
+        """
+        card_history = np.array([len(state_set) for state_set in self.states])
+
+        opts = pltUtil.init_plotting_opts(**kwargs)
+        fig = opts['f_hndl']
+
+        if fig is None:
+            fig = plt.figure()
+            fig.add_subplot(1, 1, 1)
+
+        if time is None:
+            time = np.arange(self.card_history.size, dtype=int)
+
+        fig.axes[0].grid(True)
+        fig.axes[0].plot(time, card_history)
+
+        pltUtil.set_title_label(fig, 0, opts, ttl="Cardinality History",
+                                x_lbl='Time ({})'.format(time_units),
+                                y_lbl="Cardinality")
+        fig.tight_layout()
+
+        return fig
 
 
 class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
@@ -2778,7 +2826,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         return avg_prob_detect, avg_prob_miss_detect
 
-    def correct(self, timestep, meas, prob_det_args=(), rng=rnd.default_rng(),
+    def correct(self, timestep, meas, prob_det_args=(), rng=None,
                 **kwargs):
         """Correction step of the SMC-GLMB filter.
 
@@ -2795,10 +2843,12 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             The default is ().
         rng : numpy.random generator, optional
             Random generator for the selection stage. The default is
-            numpy.random.default_rng().
+            numpy.random.default_rng(1).
         **kwargs : dict, optional
             See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.correct`
         """
+        if rng is None:
+            rng = rnd.default_rng(1)
         self._prob_det_args = prob_det_args
         self._rng = rng
         return super().correct(timestep, meas, **kwargs)
@@ -2811,7 +2861,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return new_state, new_cov, new_label
 
     def extract_states(self, prob_surv_args=(), prob_det_args=(),
-                       rng=rnd.default_rng(), **kwargs):
+                       rng=None, **kwargs):
         """Extracts the state estimates.
 
         This is a wrapper for the parent method to allow for extra arguments.
@@ -2833,6 +2883,8 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
 
         """
+        if rng is None:
+            rng = rnd.default_rng(1)
         self._prob_surv_args = prob_surv_args
         self._prob_det_args = prob_det_args
         self._rng = rng
