@@ -18,7 +18,7 @@ global_seed = 69
 debug_plots = False
 
 _meas_mat = np.array([[1, 0, 0, 0],
-                  [0, 1, 0, 0]])
+                      [0, 1, 0, 0]])
 
 
 def _state_mat_fun(t, dt, useless):
@@ -73,26 +73,29 @@ def _setup_double_int_pf(dt, rng):
     m_noise = 0.02
     p_noise = 0.2
 
+    doubleInt = gdyn.DoubleIntegrator()
+    proc_noise = doubleInt.get_dis_process_noise_mat(dt, np.array([[p_noise**2]]))
+
     def meas_likelihood(meas, est, *args):
-        # z = ((meas - est) / m_noise)
-        # p1 = stats.norm.pdf(z[0].item())
-        # p2 = stats.norm.pdf(z[1].item())
         return stats.multivariate_normal.pdf(meas.flatten(), mean=est.flatten(),
                                              cov=m_noise**2 * np.eye(2))
 
-    def proposal_sampling_fnc(x, rng):
-        noise = p_noise * np.array([0, 0, 1, 1]) * rng.standard_normal(4)
-        return x + noise.reshape((4, 1))
+    # def proposal_sampling_fnc(x, rng):
+    #     noise = p_noise * np.array([0, 0, 1, 1]) * rng.standard_normal(4)
+    #     return x + noise.reshape((4, 1))
+
+    def proposal_sampling_fnc(x, rng):  # noqa
+        val = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
+        return val
 
     def proposal_fnc(x_hat, cond, *args):
         return 1
 
-    doubleInt = gdyn.DoubleIntegrator()
     filt = gfilts.ParticleFilter()
     filt.set_state_model(dyn_obj=doubleInt)
     filt.set_measurement_model(meas_fun=_meas_mat_fun_nonlin)
 
-    filt.proc_noise = doubleInt.get_dis_process_noise_mat(dt, np.array([[p_noise**2]]))
+    filt.proc_noise = proc_noise.copy()
     filt.meas_noise = m_noise**2 * np.eye(2)
 
     filt.meas_likelihood_fnc = meas_likelihood
@@ -110,22 +113,30 @@ def _setup_double_int_upf(dt, rng, use_MCMC):
 
     filt = gfilts.UnscentedParticleFilter(use_MCMC=use_MCMC)
     filt.set_state_model(dyn_obj=doubleInt)
-    filt.set_measurement_model(meas_mat=_meas_mat)
+    filt.set_measurement_model(meas_mat=_meas_mat.copy())
 
-    filt.proc_noise = doubleInt.get_dis_process_noise_mat(dt, np.array([[p_noise**2]]))
-    filt.meas_noise = m_noise**2 * np.eye(2)
+    proc_noise = doubleInt.get_dis_process_noise_mat(dt, np.array([[p_noise**2]]))
+    meas_noise = m_noise**2 * np.eye(2)
+    filt.proc_noise = proc_noise.copy()
+    filt.meas_noise = meas_noise.copy()
 
-    def meas_likelihood(meas, est, *args):
+    def meas_likelihood(meas, est, *args):  # noqa
         return stats.multivariate_normal.pdf(meas.flatten(), mean=est.flatten(),
-                                             cov=m_noise**2 * np.eye(2))
+                                             cov=meas_noise)
 
-    def proposal_sampling_fnc(x, rng):
-        val = rng.multivariate_normal(x.flatten(), filt.proc_noise).reshape(x.shape)
+    def proposal_sampling_fnc(x, rng):  # noqa
+        val = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
         return val
-        # noise = p_noise * np.array([0, 0, 1, 1]) * rng.standard_normal(4)
-        # return x + noise.reshape((4, 1))
 
-    def proposal_fnc(x_hat, cond, *args):
+    # def proposal_fnc(x_hat, cond, p_hat, *args):  # noqa
+    #     return stats.multivariate_normal.pdf(x_hat.flatten(), mean=cond.flatten(),
+    #                                           cov=p_hat)
+
+    # def proposal_sampling_fnc(x, rng):
+    #     noise = p_noise * np.array([0, 0, 1, 1]) * rng.standard_normal(4)
+    #     return x + noise.reshape((4, 1))
+
+    def proposal_fnc(x_hat, cond, p_hat, *args):
         return 1
 
     filt.meas_likelihood_fnc = meas_likelihood
@@ -182,7 +193,7 @@ def _setup_smc_glmb_double_int_birth(num_parts, rng):
 
 def _setup_usmc_glmb_double_int_birth(num_parts, rng):
     means = [np.array([10., 0., 0., 2.]).reshape((4, 1))]
-    cov = np.diag(np.array([1, 1, 1, 1]))**2
+    cov = np.diag(np.array([0.02, 0.02, 0.5, 0.5]))**2
     b_probs = [0.005, ]
     alpha = 0.5
     kappa = 3
@@ -210,9 +221,12 @@ def _setup_usmc_glmb_double_int_birth(num_parts, rng):
 def _gen_meas(tt, true_agents, proc_noise, meas_noise, rng):
     meas_in = []
     for x in true_agents:
-        xp = x + (np.sqrt(np.diag(proc_noise)) * rng.standard_normal(1)).reshape((4, 1))
-        noise = (np.sqrt(np.diag(meas_noise)) * rng.standard_normal(1)).reshape((2, 1))
-        m = _meas_mat_fun(tt, 'useless') @ xp + noise
+        xp = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
+        # xp = x + (np.sqrt(np.diag(proc_noise)) * rng.standard_normal(1)).reshape((4, 1))
+        # noise = (np.sqrt(np.diag(meas_noise)) * rng.standard_normal(1)).reshape((2, 1))
+        meas = _meas_mat @ xp
+        m = rng.multivariate_normal(meas.flatten(), meas_noise).reshape(meas.shape)
+        # m = _meas_mat_fun(tt, 'useless') @ xp + noise
         meas_in.append(m.copy())
 
     return meas_in
@@ -275,9 +289,7 @@ def _update_true_agents_prob_usmc(true_agents, tt, dt, b_model, rng):
     if any(np.abs(tt - np.array([0.5])) < 1e-8):
         for distrib, w in b_model:
             print('birth at {:.2f}'.format(tt))
-            inds = np.arange(0, len(distrib.particles))
-            ii = rnd.choice(inds, p=distrib.weights)
-            out.append(distrib.particles[ii].copy())
+            out.append(distrib.mean.copy())
 
     return out
 
@@ -399,6 +411,7 @@ def test_GLMB():  # noqa
     GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args, **RFS_base_args)
+    glmb.use_parallel_correct = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -498,7 +511,6 @@ def test_STM_GLMB():  # noqa
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
 
-@pytest.mark.slow
 def test_SMC_GLMB():  # noqa
     print('Test SMC-GLMB')
 
@@ -539,6 +551,7 @@ def test_SMC_GLMB():  # noqa
     glmb = tracker.SMCGeneralizedLabeledMultiBernoulli(**SMC_args,
                                                        **GLMB_args,
                                                        **RFS_base_args)
+    glmb.use_parallel_correct = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -576,6 +589,7 @@ def test_SMC_GLMB():  # noqa
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
     print('\tExpecting {} agents'.format(len(true_agents)))
 
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
@@ -589,7 +603,7 @@ def test_USMC_GLMB():  # noqa
 
     dt = 0.01
     t0, t1 = 0, 2 + dt
-    num_parts = 150
+    num_parts = 75
     prob_detection = 0.99
     prob_survive = 0.98
     use_MCMC = False
@@ -665,6 +679,7 @@ def test_USMC_GLMB():  # noqa
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
     print('\tExpecting {} agents'.format(len(true_agents)))
 
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
@@ -766,14 +781,23 @@ def test_MCMC_USMC_GLMB():  # noqa
 
 # %% main
 if __name__ == "__main__":
+    from timeit import default_timer as timer
     plt.close('all')
 
     debug_plots = True
 
+    start = timer()
+
     # test_PHD()
     # test_CPHD()
 
-    test_GLMB()
+    # test_GLMB()
+
     # test_STM_GLMB()
+
     # test_SMC_GLMB()
-    # test_USMC_GLMB()
+    test_USMC_GLMB()
+    # test_MCMC_USMC_GLMB()
+
+    end = timer()
+    print(end - start)

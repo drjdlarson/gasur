@@ -18,6 +18,7 @@ from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 import gncpy.plotting as pltUtil
+import gncpy.filters as gfilts
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -2778,29 +2779,95 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         """Corrects the probability density and resamples."""
         self.filter.init_from_dist(probDensity)
 
-        likelihood, inds_removed = self.filter.correct(timestep, meas, selection=False,
-                                                       **filt_args)[1:3]
+        can_move = isinstance(self.filter, gfilts.MCMCParticleFilterBase) \
+            and self.filter.use_MCMC
+        if can_move:
+            move_flag = {'allow_move': False}
+            oldDist = deepcopy(self.filter._particleDist)
+        else:
+            move_flag = {}
+        un_norm_weights = self.filter.correct(timestep, meas, selection=False,
+                                              **move_flag, **filt_args)[1]
+
         newProbDen = self.filter.extract_dist(make_copy=False)
 
-        pd = self.compute_prob_detection(probDensity.particles, *self._prob_det_args)
-        if all(np.abs(newProbDen.weights) == np.inf):
-            new_weights = np.inf * np.ones(len(newProbDen.weights))
-        else:
-            new_weights = (np.array(pd) * np.array(likelihood)
-                           * np.array(newProbDen.weights))
-        tot = sum(new_weights)
+        # manually upate the weights to allow for probability of detection
+        pd = self.compute_prob_detection(newProbDen.particles, *self._prob_det_args)
+        new_weights = un_norm_weights * np.array(pd)
+
+        tot = np.sum(new_weights)
         if tot > 0 and np.abs(tot) != np.inf:
             new_weights = (new_weights / tot).tolist()
         else:
-            new_weights = [np.inf] * len(new_weights)
+            new_weights = [np.inf] * new_weights.size
             tot = np.inf  # division by 0 would give inf
 
         newProbDen.update_weights(new_weights)
+
+        # perform selection with updated weights
         self.filter.init_from_dist(newProbDen, make_copy=False)
         self.filter._selection(self._rng)
+
+        # optional move step if available
+        if can_move:
+            if 'move_kwargs' in filt_args:
+                move_kwargs = filt_args['move_kwargs']
+            else:
+                move_kwargs = {}
+            self.filter.move_particles(timestep, oldDist, meas, **move_kwargs)
+
+        # extract new distribution
         newProbDen = self.filter.extract_dist(make_copy=False)
 
-        return newProbDen, tot
+        # get unnormalized relative likelihood after resampling
+        # if 'meas_fun_args' in filt_args:
+        #     meas_fun_args = filt_args['meas_fun_args']
+        # else:
+        #     meas_fun_args = ()
+        # if 'meas_likely_args' in filt_args:
+        #     meas_likely_args = filt_args['meas_likely_args']
+        # else:
+        #     meas_likely_args = ()
+        # if isinstance(self.filter, gfilts.UnscentedParticleFilter):
+        #     est_meas = [self.filter._filt._est_meas(timestep, p, meas.size,
+        #                                             meas_fun_args)[0]
+        #                 for p in newProbDen.particles]
+        # else:
+        #     est_meas = [self.filter._est_meas(timestep, p, meas.size,
+        #                                       meas_fun_args)[0]
+        #                 for p in newProbDen.particles]
+        # rel_likeli = self.filter._calc_relative_likelihoods(meas, est_meas,
+        #                                                     renorm=False,
+        #                                                     meas_likely_args=meas_likely_args)
+        # pd = self.compute_prob_detection(newProbDen.particles, *self._prob_det_args)
+
+        return newProbDen, tot  # np.sum(rel_likeli * pd * newProbDen.weights).item()
+
+        # self.filter.init_from_dist(probDensity)
+
+        # likelihood, inds_removed = self.filter.correct(timestep, meas, selection=False,
+        #                                                **filt_args)[1:3]
+        # newProbDen = self.filter.extract_dist(make_copy=False)
+
+        # pd = self.compute_prob_detection(probDensity.particles, *self._prob_det_args)
+        # if all(np.abs(newProbDen.weights) == np.inf):
+        #     new_weights = np.inf * np.ones(len(newProbDen.weights))
+        # else:
+        #     new_weights = (np.array(pd) * np.array(likelihood)
+        #                    * np.array(newProbDen.weights))
+        # tot = sum(new_weights)
+        # if tot > 0 and np.abs(tot) != np.inf:
+        #     new_weights = (new_weights / tot).tolist()
+        # else:
+        #     new_weights = [np.inf] * len(new_weights)
+        #     tot = np.inf  # division by 0 would give inf
+
+        # newProbDen.update_weights(new_weights)
+        # self.filter.init_from_dist(newProbDen, make_copy=False)
+        # self.filter._selection(self._rng)
+        # newProbDen = self.filter.extract_dist(make_copy=False)
+
+        # return newProbDen, tot
 
     def _correct_track_tab_entry(self, meas, tab, timestep, filt_args):
         if len(tab.prop_parts) == 0:
