@@ -88,10 +88,16 @@ def _setup_double_int_pf(dt, rng):
         val = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
         return val
 
-    def proposal_fnc(x_hat, cond, *args):
-        return 1
+    def transition_prob_fnc(x_hat, mean, *args):
+        return stats.multivariate_normal.pdf(x_hat.flatten(), mean.flatten(),
+                                             proc_noise, True)
 
-    filt = gfilts.ParticleFilter()
+    def proposal_fnc(x_hat, mean, y, *args):
+        return 1
+        # return stats.multivariate_normal.pdf(x_hat.flatten(), mean.flatten(),
+        #                                      proc_noise, True)
+
+    filt = gfilts.ParticleFilter(rng=rng)
     filt.set_state_model(dyn_obj=doubleInt)
     filt.set_measurement_model(meas_fun=_meas_mat_fun_nonlin)
 
@@ -101,6 +107,7 @@ def _setup_double_int_pf(dt, rng):
     filt.meas_likelihood_fnc = meas_likelihood
     filt.proposal_sampling_fnc = proposal_sampling_fnc
     filt.proposal_fnc = proposal_fnc
+    # filt.transition_prob_fnc = transition_prob_fnc
 
     return filt
 
@@ -111,7 +118,7 @@ def _setup_double_int_upf(dt, rng, use_MCMC):
 
     doubleInt = gdyn.DoubleIntegrator()
 
-    filt = gfilts.UnscentedParticleFilter(use_MCMC=use_MCMC)
+    filt = gfilts.UnscentedParticleFilter(use_MCMC=use_MCMC, rng=rng)
     filt.set_state_model(dyn_obj=doubleInt)
     filt.set_measurement_model(meas_mat=_meas_mat.copy())
 
@@ -119,29 +126,6 @@ def _setup_double_int_upf(dt, rng, use_MCMC):
     meas_noise = m_noise**2 * np.eye(2)
     filt.proc_noise = proc_noise.copy()
     filt.meas_noise = meas_noise.copy()
-
-    def meas_likelihood(meas, est, *args):  # noqa
-        return stats.multivariate_normal.pdf(meas.flatten(), mean=est.flatten(),
-                                             cov=meas_noise)
-
-    def proposal_sampling_fnc(x, rng):  # noqa
-        val = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
-        return val
-
-    # def proposal_fnc(x_hat, cond, p_hat, *args):  # noqa
-    #     return stats.multivariate_normal.pdf(x_hat.flatten(), mean=cond.flatten(),
-    #                                           cov=p_hat)
-
-    # def proposal_sampling_fnc(x, rng):
-    #     noise = p_noise * np.array([0, 0, 1, 1]) * rng.standard_normal(4)
-    #     return x + noise.reshape((4, 1))
-
-    def proposal_fnc(x_hat, cond, p_hat, *args):
-        return 1
-
-    filt.meas_likelihood_fnc = meas_likelihood
-    filt.proposal_sampling_fnc = proposal_sampling_fnc
-    filt.proposal_fnc = proposal_fnc
 
     return filt
 
@@ -192,11 +176,13 @@ def _setup_smc_glmb_double_int_birth(num_parts, rng):
 
 
 def _setup_usmc_glmb_double_int_birth(num_parts, rng):
-    means = [np.array([10., 0., 0., 2.]).reshape((4, 1))]
-    cov = np.diag(np.array([0.02, 0.02, 0.5, 0.5]))**2
+    # means = [np.array([10., 0., 0., 2.]).reshape((4, 1))]
+    means = [np.array([20, 80, 3, -3]).reshape((4, 1))]
+    # cov = np.diag(np.array([1, 1, 1, 1]))**2
+    cov = np.diag([3**2, 5**2, 2**2, 1])
     b_probs = [0.005, ]
-    alpha = 0.5
-    kappa = 3
+    alpha = 10**-3
+    kappa = 0
 
     birth_terms = []
     for (m, p) in zip(means, b_probs):
@@ -222,11 +208,8 @@ def _gen_meas(tt, true_agents, proc_noise, meas_noise, rng):
     meas_in = []
     for x in true_agents:
         xp = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
-        # xp = x + (np.sqrt(np.diag(proc_noise)) * rng.standard_normal(1)).reshape((4, 1))
-        # noise = (np.sqrt(np.diag(meas_noise)) * rng.standard_normal(1)).reshape((2, 1))
         meas = _meas_mat @ xp
         m = rng.multivariate_normal(meas.flatten(), meas_noise).reshape(meas.shape)
-        # m = _meas_mat_fun(tt, 'useless') @ xp + noise
         meas_in.append(m.copy())
 
     return meas_in
@@ -269,9 +252,8 @@ def _update_true_agents_prob_smc(true_agents, tt, dt, b_model, rng):
     for ii, x in enumerate(true_agents):
         out.append(doubleInt.get_state_mat(tt, dt) @ x)
 
-    p = rng.uniform()
-    for distrib, w in b_model:
-        if p <= w:
+    if any(np.abs(tt - np.array([0.5])) < 1e-8):
+        for distrib, w in b_model:
             print('birth at {:.2f}'.format(tt))
             inds = np.arange(0, len(distrib.particles))
             ii = rnd.choice(inds, p=distrib.weights)
@@ -511,18 +493,20 @@ def test_STM_GLMB():  # noqa
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
 
+@pytest.mark.slow
 def test_SMC_GLMB():  # noqa
     print('Test SMC-GLMB')
 
     rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
 
     dt = 0.01
-    t0, t1 = 0, 2 + dt
+    t0, t1 = 0, 1 + dt
     num_parts = 1000
     prob_detection = 0.99
     prob_survive = 0.98
 
-    filt = _setup_double_int_pf(dt, rng)
+    filt = _setup_double_int_pf(dt, filt_rng)
     meas_fun_args = ()
     dyn_fun_params = (dt, )
 
@@ -565,15 +549,15 @@ def test_SMC_GLMB():  # noqa
         true_agents = _update_true_agents_prob_smc(true_agents, tt, dt, b_model, rng)
         global_true.append(deepcopy(true_agents))
 
-        pred_args = {'dyn_fun_params': dyn_fun_params, 'sampling_args': (rng, )}
+        pred_args = {'dyn_fun_params': dyn_fun_params}
         prob_surv_args = (prob_survive, )
         glmb.predict(tt, prob_surv_args=prob_surv_args, filt_args=pred_args)
 
         meas_in = _gen_meas(tt, true_agents, filt.proc_noise, filt.meas_noise, rng)
 
-        cor_args = {'meas_fun_args': meas_fun_args, 'rng': rng}
+        cor_args = {'meas_fun_args': meas_fun_args}
         prob_det_args = (prob_detection, )
-        glmb.correct(tt, meas_in, prob_det_args=prob_det_args, rng=rng,
+        glmb.correct(tt, meas_in, prob_det_args=prob_det_args,
                      filt_args=cor_args)
 
         extract_kwargs = {'update': True, 'calc_states': False}
@@ -581,7 +565,7 @@ def test_SMC_GLMB():  # noqa
 
     extract_kwargs = {'update': False, 'calc_states': True,
                       'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args, 'rng': rng,
+                      'prob_det_args': prob_det_args,
                       'pred_args': pred_args, 'cor_args': cor_args}
     glmb.extract_states(**extract_kwargs)
 
@@ -600,15 +584,16 @@ def test_USMC_GLMB():  # noqa
     print('Test USMC-GLMB')
 
     rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
 
     dt = 0.01
-    t0, t1 = 0, 2 + dt
+    t0, t1 = 0, 1 + dt
     num_parts = 75
     prob_detection = 0.99
     prob_survive = 0.98
     use_MCMC = False
 
-    filt = _setup_double_int_upf(dt, rng, use_MCMC)
+    filt = _setup_double_int_upf(dt, filt_rng, use_MCMC)
     meas_fun_args = ()
     dyn_fun_params = (dt, )
 
@@ -660,10 +645,8 @@ def test_USMC_GLMB():  # noqa
 
         prob_det_args = (prob_detection, )
         ukf_kwargs_cor = {'meas_fun_args': meas_fun_args}
-        filt_args_cor = {'ukf_kwargs': ukf_kwargs_cor, 'rng': rng,
-                         'sampling_args': (rng, ),
-                         'meas_fun_args': meas_fun_args}
-        glmb.correct(tt, meas_in, prob_det_args=prob_det_args, rng=rng,
+        filt_args_cor = {'ukf_kwargs': ukf_kwargs_cor}
+        glmb.correct(tt, meas_in, prob_det_args=prob_det_args,
                      filt_args=filt_args_cor)
 
         extract_kwargs = {'update': True, 'calc_states': False}
@@ -671,7 +654,7 @@ def test_USMC_GLMB():  # noqa
 
     extract_kwargs = {'update': False, 'calc_states': True,
                       'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args, 'rng': rng,
+                      'prob_det_args': prob_det_args,
                       'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
     glmb.extract_states(**extract_kwargs)
 
@@ -681,6 +664,7 @@ def test_USMC_GLMB():  # noqa
         glmb.plot_card_dist()
         glmb.plot_card_history(time_units='s', time=time)
     print('\tExpecting {} agents'.format(len(true_agents)))
+    print('max cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
 
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
@@ -801,3 +785,4 @@ if __name__ == "__main__":
 
     end = timer()
     print(end - start)
+    plt.show()
