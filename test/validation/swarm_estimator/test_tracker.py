@@ -119,6 +119,8 @@ def _setup_double_int_upf(dt, rng, use_MCMC):
     doubleInt = gdyn.DoubleIntegrator()
 
     filt = gfilts.UnscentedParticleFilter(use_MCMC=use_MCMC, rng=rng)
+    filt.use_cholesky_inverse = False
+
     filt.set_state_model(dyn_obj=doubleInt)
     filt.set_measurement_model(meas_mat=_meas_mat.copy())
 
