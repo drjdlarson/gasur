@@ -2902,9 +2902,6 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         prob_det_args : tuple, optional
             Additional arguments for the `compute_prob_detection` function.
             The default is ().
-        rng : numpy.random generator, optional
-            Random generator for the selection stage. The default is
-            numpy.random.default_rng(1).
         **kwargs : dict, optional
             See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.correct`
         """
@@ -2932,9 +2929,6 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         prob_det_args : tuple, optional
             Additional arguments for the `compute_prob_detection` function.
             The default is ().
-        rng : numpy.random generator, optional
-            Random generator for the selection stage. The default is
-            numpy.random.default_rng().
         **kwargs : dict, optional
             See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
 
