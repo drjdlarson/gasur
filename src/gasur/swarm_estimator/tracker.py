@@ -2754,6 +2754,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
     class _TabEntry(GeneralizedLabeledMultiBernoulli._TabEntry):
         def __init__(self):
             self.prop_parts = []
+            self.candDist = None
 
             super().__init__()
 
@@ -2788,9 +2789,16 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return newProbDen
 
     def _predict_track_tab_entry(self, tab, timestep, filt_args):
+        if self.filter.require_copy_can_dist:
+            self.filter.candDist = deepcopy(tab.candDist)
+
         newTab = super()._predict_track_tab_entry(tab, timestep, filt_args)
+
         if self.filter.require_copy_prop_parts:
-            newTab.prop_parts = list(np.stack(self.filter._prop_parts).copy())
+            newTab.prop_parts = list(np.stack(self.filter.prop_parts).copy())
+        if self.filter.require_copy_can_dist:
+            newTab.candDist = deepcopy(self.filter.candDist)
+
         return newTab
 
     def _calc_avg_prob_surv_death(self):
@@ -2850,11 +2858,21 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 prop_parts = list(np.stack(tab.probDensity.particles).copy())
             else:
                 prop_parts = list(np.stack(tab.prop_parts).copy())
-            self.filter._prop_parts = prop_parts
+            self.filter.prop_parts = prop_parts
+
+        if self.filter.require_copy_can_dist:
+            if tab.candDist is None:
+                # this has only been initialized by the birth and not predicted
+                self.filter.candDist = deepcopy(tab.probDensity)
+            else:
+                self.filter.candDist = deepcopy(tab.candDist)
         newTab, cost = super()._correct_track_tab_entry(meas, tab, timestep,
                                                         filt_args)
         if self.filter.require_copy_prop_parts:
-            newTab.prop_parts = self.filter._prop_parts
+            newTab.prop_parts = self.filter.prop_parts
+
+        if self.filter.require_copy_can_dist:
+            newTab.candDist = self.filter.candDist
 
         return newTab, cost
 

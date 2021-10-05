@@ -676,15 +676,16 @@ def test_MCMC_USMC_GLMB():  # noqa
     print('Test MCMC USMC-GLMB')
 
     rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
 
     dt = 0.01
-    t0, t1 = 0, 2 + dt
-    num_parts = 75
+    t0, t1 = 0, 1 + dt
+    num_parts = 30
     prob_detection = 0.99
     prob_survive = 0.98
     use_MCMC = True
 
-    filt = _setup_double_int_upf(dt, rng, use_MCMC)
+    filt = _setup_double_int_upf(dt, filt_rng, use_MCMC)
     meas_fun_args = ()
     dyn_fun_params = (dt, )
 
@@ -736,15 +737,8 @@ def test_MCMC_USMC_GLMB():  # noqa
 
         prob_det_args = (prob_detection, )
         ukf_kwargs_cor = {'meas_fun_args': meas_fun_args}
-        sampling_args = (rng, )
-        move_kwargs = {'ukf_kwargs': ukf_kwargs_cor,
-                       'rng': rng, 'sampling_args': sampling_args,
-                       'meas_fun_args': meas_fun_args}
-        filt_args_cor = {'ukf_kwargs': ukf_kwargs_cor, 'rng': rng,
-                         'sampling_args': sampling_args,
-                         'meas_fun_args': meas_fun_args,
-                         'move_kwargs': move_kwargs}
-        glmb.correct(tt, meas_in, prob_det_args=prob_det_args, rng=rng,
+        filt_args_cor = {'ukf_kwargs': ukf_kwargs_cor}
+        glmb.correct(tt, meas_in, prob_det_args=prob_det_args,
                      filt_args=filt_args_cor)
 
         extract_kwargs = {'update': True, 'calc_states': False}
@@ -752,7 +746,7 @@ def test_MCMC_USMC_GLMB():  # noqa
 
     extract_kwargs = {'update': False, 'calc_states': True,
                       'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args, 'rng': rng,
+                      'prob_det_args': prob_det_args,
                       'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
     glmb.extract_states(**extract_kwargs)
 
@@ -760,7 +754,9 @@ def test_MCMC_USMC_GLMB():  # noqa
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
     print('\tExpecting {} agents'.format(len(true_agents)))
+    print('max cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
 
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
@@ -782,9 +778,10 @@ if __name__ == "__main__":
     # test_STM_GLMB()
 
     # test_SMC_GLMB()
-    test_USMC_GLMB()
-    # test_MCMC_USMC_GLMB()
+    # test_USMC_GLMB()
+    test_MCMC_USMC_GLMB()
 
     end = timer()
-    print(end - start)
+    print('{:.2f} s'.format(end - start))
+    print('Close all plots to exit')
     plt.show()
