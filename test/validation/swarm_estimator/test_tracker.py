@@ -64,7 +64,7 @@ def _setup_double_int_stf(dt):
 
     filt.meas_noise_dof = 3
     filt.proc_noise_dof = 3
-    filt.dof = 3
+    # Note filt.dof is determined by the birth terms
 
     return filt
 
