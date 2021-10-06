@@ -19,6 +19,7 @@ from gasur.utilities.graphs import k_shortest, murty_m_best
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 import gncpy.plotting as pltUtil
 import gncpy.filters as gfilts
+import gncpy.errors as gerr
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -2159,10 +2160,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self._update_extract_hist(idx_cmp)
 
         if calc_states:
-            # if there are no old or new tracks assume its the first iteration
-            # if len(self._lab_mem) == 0 and len(self._meas_asoc_mem) == 0:
-            #     return None
-
             for existing in self._extractable_hists:
                 b_time, b_idx = existing.label
                 pd = deepcopy(self.birth_terms[b_idx][0])
@@ -2178,6 +2175,10 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
                     new_state, new_cov = self._extract_helper(pd)
 
+                    # may happen if filter fails so stop trying to extract track
+                    if new_state is None:
+                        break
+
                     if len(self._labels[tt]) == 0:
                         self._states[tt] = [new_state]
                         self._labels[tt] = [existing.label]
@@ -2188,35 +2189,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         self._labels[tt].append(existing.label)
                         if self.save_covs:
                             self._covs[tt].append(new_cov)
-
-            # for (hist, (b_time, b_idx, b_t_ind)) in zip(self._meas_asoc_mem, self._lab_mem):
-            #     pd = deepcopy(self.birth_terms[b_idx][0])
-
-            #     for (t_after_b, emm) in enumerate(hist):
-            #         timestep = b_time + t_after_b
-            #         # propagate for GM
-            #         pd = self._predict_prob_density(timestep, pd, pred_args)
-
-            #         # measurement correction for GM
-            #         tt = b_t_ind + t_after_b
-            #         if emm is not None:
-            #             meas = self._meas_tab[tt][emm].copy()
-            #             pd = self._correct_prob_density(timestep, meas, pd, cor_args)[0]
-
-            #         # find best one and add to state table
-            #         new_state, new_cov, new_label = self._extract_helper(pd,
-            #                                                              b_time,
-            #                                                              b_idx)
-            #         if len(self._labels[tt]) == 0:
-            #             self._states[tt] = [new_state]
-            #             self._labels[tt] = [new_label]
-            #             if self.save_covs:
-            #                 self._covs[tt] = [new_cov]
-            #         else:
-            #             self._states[tt].append(new_state)
-            #             self._labels[tt].append(new_label)
-            #             if self.save_covs:
-            #                 self._covs[tt].append(new_cov)
 
         if not update and not calc_states:
             warn('Extracting states performed no actions')
@@ -2777,15 +2749,14 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         newProbDen = self.filter.extract_dist(make_copy=False)
 
-        ps = self.compute_prob_survive(probDensity.particles, *self._prob_surv_args)
-        new_weights = [w * ps[ii] for ii, (p, w) in enumerate(probDensity)]
+        ps = self.compute_prob_survive(newProbDen.particles, *self._prob_surv_args)
+        new_weights = [w * ps[ii] for ii, (p, w) in enumerate(newProbDen)]
         tot = sum(new_weights)
         if np.abs(tot) == np.inf:
             w_lst = [np.inf] * len(new_weights)
         else:
             w_lst = [w / tot for w in new_weights]
         newProbDen.update_weights(w_lst)
-
         return newProbDen
 
     def _predict_track_tab_entry(self, tab, timestep, filt_args):
@@ -2836,18 +2807,22 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
     def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
         """Corrects the probability density and resamples."""
         self.filter.init_from_dist(probDensity, make_copy=True)
-        meas_likely = self.filter.correct(timestep, meas, **filt_args)[1]
+        try:
+            meas_likely = self.filter.correct(timestep, meas, **filt_args)[1]
 
-        newProbDen = self.filter.extract_dist(make_copy=False)
+            newProbDen = self.filter.extract_dist(make_copy=False)
 
-        # manually upate the weights to allow for probability of detection
-        pd = self.compute_prob_detection(newProbDen.particles, *self._prob_det_args)
-        pd_weight = pd * np.array(newProbDen.weights)
-        newProbDen.update_weights((pd_weight / np.sum(pd_weight)).tolist())
+            # manually upate the weights to allow for probability of detection
+            pd = self.compute_prob_detection(newProbDen.particles, *self._prob_det_args)
+            pd_weight = pd * np.array(newProbDen.weights)
+            newProbDen.update_weights((pd_weight / np.sum(pd_weight)).tolist())
 
-        # determine the partial cost, the remainder is calculated later from
-        # the hypothesis
-        cost = np.sum(meas_likely * pd_weight)
+            # determine the partial cost, the remainder is calculated later from
+            # the hypothesis
+            cost = np.sum(meas_likely * pd_weight)
+        except gerr.ParticleDepletionError:
+            newProbDen = self.filter.extract_dist(make_copy=False)
+            cost = np.inf
 
         return newProbDen, cost
 
@@ -2910,6 +2885,8 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def _extract_helper(self, pd):
         new_state = pd.mean
+        if new_state.size == 0:
+            new_state = None
         new_cov = pd.covariance
 
         return new_state, new_cov
