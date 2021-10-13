@@ -230,7 +230,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
                 continue
 
             if x_empty or y_empty:
-                self.ospa[ii] = 0
+                self.ospa[ii] = c
                 self.ospa_localization[ii] = 0
                 self.ospa_cardinality[ii] = c
                 continue
@@ -1656,8 +1656,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             cost = p / (1 - p)
             log_cost.append(-np.log(cost))
             entry = self._TabEntry()
-            # entry.probDensity = deepcopy(distrib)
-            entry.probDensity = distrib
+            entry.probDensity = deepcopy(distrib)
             entry.label = (round(timestep, self.decimal_places), ii)
             entry.time_index = self._time_index_cntr
             birth_tab.append(entry)
@@ -1945,13 +1944,13 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
                     min_row_inds, min_col_inds = np.where(cost_m <= 0.)
                     if min_row_inds.size > 0:
-                        cost_m[min_row_inds, min_col_inds] = 1
+                        cost_m[min_row_inds, min_col_inds] = np.finfo(float).eps  # 1
 
                     neg_log = -np.log(cost_m)
                     # if max_row_inds.size > 0:
                     #     neg_log[max_row_inds, max_col_inds] = -np.inf
-                    if min_row_inds.size > 0:
-                        neg_log[min_row_inds, min_col_inds] = np.inf
+                    # if min_row_inds.size > 0:
+                    #     neg_log[min_row_inds, min_col_inds] = np.inf
 
                     m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)
                                  / ss_w)
@@ -1965,11 +1964,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         new_hyp.assoc_prob = -self.clutter_rate + num_meas \
                             * np.log(clutter) + pmd_log \
                             + np.log(p_hyp.assoc_prob) - c
-                        # lst1 = [num_pred * x for x in a]
-                        # lst2 = p_hyp.track_set.copy()
-                        # if len(lst1) != len(lst2):
-                        #     raise RuntimeWarning('Lists not the same length')
-                        # new_hyp.track_set = [sum(x) for x in zip(lst1, lst2)]
                         new_hyp.track_set = list(np.array(p_hyp.track_set) + num_pred * a)
                         up_hyps.append(new_hyp)
 
@@ -2447,14 +2441,17 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
                     if show_sig:
                         sig = np.zeros((2, 2))
-                        sig[0, 0] = self._covs[tt][ii][plt_inds[0],
-                                                       plt_inds[0]]
-                        sig[0, 1] = self._covs[tt][ii][plt_inds[0],
-                                                       plt_inds[1]]
-                        sig[1, 0] = self._covs[tt][ii][plt_inds[1],
-                                                       plt_inds[0]]
-                        sig[1, 1] = self._covs[tt][ii][plt_inds[1],
-                                                       plt_inds[1]]
+                        if self._covs[tt][ii] is not None:
+                            sig[0, 0] = self._covs[tt][ii][plt_inds[0],
+                                                           plt_inds[0]]
+                            sig[0, 1] = self._covs[tt][ii][plt_inds[0],
+                                                           plt_inds[1]]
+                            sig[1, 0] = self._covs[tt][ii][plt_inds[1],
+                                                           plt_inds[0]]
+                            sig[1, 1] = self._covs[tt][ii][plt_inds[1],
+                                                           plt_inds[1]]
+                        else:
+                            sig = None
                         sigs[tt] = sig
 
             # plot
@@ -2743,20 +2740,24 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def _predict_prob_density(self, timestep, probDensity, filt_args):
         """Predicts the next probability density."""
-        self.filter.init_from_dist(probDensity, make_copy=True)
+        if probDensity.num_particles > 0:
+            self.filter.init_from_dist(probDensity, make_copy=True)
 
-        self.filter.predict(timestep, **filt_args)
+            self.filter.predict(timestep, **filt_args)
 
-        newProbDen = self.filter.extract_dist(make_copy=False)
+            newProbDen = self.filter.extract_dist(make_copy=False)
 
-        ps = self.compute_prob_survive(newProbDen.particles, *self._prob_surv_args)
-        new_weights = [w * ps[ii] for ii, (p, w) in enumerate(newProbDen)]
-        tot = sum(new_weights)
-        if np.abs(tot) == np.inf:
-            w_lst = [np.inf] * len(new_weights)
+            ps = self.compute_prob_survive(newProbDen.particles, *self._prob_surv_args)
+            new_weights = [w * ps[ii] for ii, (p, w) in enumerate(newProbDen)]
+            tot = sum(new_weights)
+            if np.abs(tot) == np.inf:
+                w_lst = [np.inf] * len(new_weights)
+            else:
+                w_lst = [w / tot for w in new_weights]
+            newProbDen.update_weights(w_lst)
         else:
-            w_lst = [w / tot for w in new_weights]
-        newProbDen.update_weights(w_lst)
+            newProbDen = deepcopy(probDensity)
+
         return newProbDen
 
     def _predict_track_tab_entry(self, tab, timestep, filt_args):
@@ -2806,23 +2807,27 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
         """Corrects the probability density and resamples."""
-        self.filter.init_from_dist(probDensity, make_copy=True)
-        try:
-            meas_likely = self.filter.correct(timestep, meas, **filt_args)[1]
+        cost = 0
+        if probDensity.num_particles > 0:
+            self.filter.init_from_dist(probDensity, make_copy=True)
+            try:
+                meas_likely = self.filter.correct(timestep, meas, **filt_args)[1]
 
-            newProbDen = self.filter.extract_dist(make_copy=False)
+                newProbDen = self.filter.extract_dist(make_copy=False)
 
-            # manually upate the weights to allow for probability of detection
-            pd = self.compute_prob_detection(newProbDen.particles, *self._prob_det_args)
-            pd_weight = pd * np.array(newProbDen.weights)
-            newProbDen.update_weights((pd_weight / np.sum(pd_weight)).tolist())
+                # manually upate the weights to allow for probability of detection
+                pd = self.compute_prob_detection(newProbDen.particles,
+                                                 *self._prob_det_args)
+                pd_weight = pd * np.array(newProbDen.weights) + np.finfo(float).eps
+                newProbDen.update_weights((pd_weight / np.sum(pd_weight)).tolist())
 
-            # determine the partial cost, the remainder is calculated later from
-            # the hypothesis
-            cost = np.sum(meas_likely * pd_weight)
-        except gerr.ParticleDepletionError:
-            newProbDen = self.filter.extract_dist(make_copy=False)
-            cost = np.inf
+                # determine the partial cost, the remainder is calculated later from
+                # the hypothesis
+                cost = np.sum(meas_likely * pd_weight)
+            except gerr.ParticleDepletionError:
+                newProbDen = self.filter.extract_dist(make_copy=False)
+        else:
+            newProbDen = deepcopy(probDensity)
 
         return newProbDen, cost
 
@@ -2885,9 +2890,10 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def _extract_helper(self, pd):
         new_state = pd.mean
+        new_cov = pd.covariance
         if new_state.size == 0:
             new_state = None
-        new_cov = pd.covariance
+            new_cov = None
 
         return new_state, new_cov
 
