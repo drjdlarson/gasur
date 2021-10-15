@@ -6,6 +6,7 @@ for RFS tracking related algorithms.
 import numpy as np
 from numpy.linalg import cholesky, inv
 import numpy.random as rnd
+import numpy.matlib as matlib
 from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
@@ -2929,7 +2930,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def predict(self, timestep, filt_args={}):
-            """ Prediction step of the GLMB filter.
+            """ Prediction step of the JGLMB filter.
 
             This predicts new hypothesis, and propogates them to the next time
             step. It also updates the cardinality distribution. Because this calls
@@ -2941,7 +2942,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             """
 
     def correct(self, timestep, meas, filt_args={}):
-        """ Correction step of the GLMB filter.
+        """ Correction step of the JGLMB filter.
 
             This corrects the hypotheses based on the measurements and gates the
             measurements according to the class settings. It also updates the
@@ -2956,48 +2957,34 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         # Birth Track Table
         self._cor_timesteps.append(timestep)
 
-        birth_tab = []
-        for ii, (distrib, p) in enumerate(self.birth_terms):
-            entry = self._TabEntry()
-            entry.probDensity = deepcopy(distrib)
-            entry.label = (time_step, ii)
-            birth_tab.append(entry)
-        # Survival Track Table
-        surv_tab = []
-        for (ii, track) in enumerate(self._track_tab):
-            distrib = self.predict_prob_density(timestep, track.probDensity,
-                                                filt_args)
+        birth_tab = self._gen_birth_tab(timestep)[0]
 
-            entry = self._TabEntry()
-            entry.probDensity = distrib
-            entry.meas_assoc_hist = deepcopy(track.meas_assoc_hist)
-            entry.label = track.label
-            surv_tab.append(entry)
+        # Survival Track Table
+        surv_tab = self._gen_surv_tab(timestep, filt_args)
+
+        # Prediction Track Table
         predict_track_tab = birth_tab + surv_tab
 
         # gating by tracks
         if self.gating_on:
             for ent in predict_track_tab:
-                ent.gatemeas = self._gate_meas(meas, ent.probDensity.means, ent.probDensity.covariances)
+                ent.gatemeas = self._gate_meas(meas, ent.probDensity.means,
+                                               ent.probDensity.covariances)
         else:
             for ent in predict_track_tab:
-                ent.gatemeas = np.arange(0, np.shape(meas)[1]) # maybe np.shape... +1?
+                ent.gatemeas = np.arange(0, len(meas))
+                # ent.gatemeas = np.arange(0, np.shape(meas)[1]) # maybe np.shape... +1?
 
         # Pre-calculation of average survival/death probabilities
-        avg_surv = []
-        for ii in range(0, np.shape(self.birth_terms)[0]):
-            avg_surv.append(self.birth_terms[ii][1])
-        for ii in range(0, len(self._track_tab)):
-            avg_surv.append(self.prob_survive)
+        avg_surv = self.prob_survive * np.ones(len(predict_track_tab))
         avg_death = 1 - avg_surv
 
         # Pre-calculation of average detection/missed probabilities
-        avg_detect = []
-        for ii in range(0, len(predict_track_tab)):
-            avg_detect.append(self.prob_detection)
+        avg_detect = self.prob_detection * np.ones(len(predict_track_tab))
         avg_miss = 1 - avg_detect
 
-        num_meas = np.shape(meas)[1]
+        # num_meas = np.shape(meas)[1]
+        num_meas = len(meas)
 
         # missed detection tracks
         num_pred = len(self._track_tab)
@@ -3024,17 +3011,25 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 all_cost_m[ii, emm] = cost
         clutter = self.clutter_rate * self.clutter_den
         # Joint Cost Matrix
-        joint_cost = np.concatenate((np.diag(avg_death),
-                                     np.diag(avg_surv*avg_miss)),
-                        kron(ones((1,m)),avg_surv*avg_detect)*all_cost_m/(clutter),
-                                     axis=1)
+        joint_cost = np.concatenate([np.diag(avg_death),
+                                     np.diag(avg_surv*avg_miss)], axis=1)
+
+        joint_cost = np.concatenate([joint_cost,
+                                     np.matlib.repmat(avg_surv*avg_detect,
+                                                1, num_meas)*all_cost_m/(clutter)], axis=1)
+        # if num_meas == 0:
+        #     joint_cost = np.append(joint_cost,
+        #                            np.matlib.repmat(avg_surv*avg_detect,
+        #                                             1, 1)*all_cost_m/(clutter))
+
         # Gated Measurement index matrix
-        gate_meas_indices = np.zeros(length(glmb_predict.tt), num_meas)
+        gate_meas_indices = np.zeros((len(predict_track_tab), num_meas))
         for ii in range(0, len(predict_track_tab)):
             for jj in range(0, len(predict_track_tab[ii].gatemeas)):
                 gate_meas_indices[ii][jj] = predict_track_tab[ii].gatemeas[jj]
         gate_meas_indc = gate_meas_indices > 0
         # Component updates
+        ss_w = 0
         for p_hyp in self._hypotheses:
             ss_w += np.sqrt(p_hyp.assoc_prob)
         for p_hyp in self._hypotheses:
@@ -3042,14 +3037,22 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             num_births = np.shape(self.birth_terms)[0]
             num_exists = len(p_hyp.track_set)
             num_tracks = num_births + num_exists
-            tindices = np.concatenate((np.arange(0, num_births), num_births + p_hyp.track_set))
+            tindices = int(np.concatenate((np.arange(0, num_births),
+                                           num_births + np.array(p_hyp.track_set))))
             lselmask = np.zeros((len(predict_track_tab), num_meas), dtype='bool')
             lselmask[tindices, ] = gate_meas_indc[tindices, ]
-            keys = gate_meas_indices[lselmask].ravel().sort()
-            difference = diff([keys, np.nan], n=1, axis=0)
+            # keys = gate_meas_indices[lselmask].ravel().sort()
+            keys = np.sort(gate_meas_indices[lselmask])
+            difference = np.diff([keys, [np.nan]], n=1, axis=0)
             keyind = np.not_equal(difference, 0)
-            mindices = keys[keyind]
-            cost_m = np.concatenate((joint_cost[tindices], joint_cost[cpreds+tindices], joint_cost[2*cpreds+mindices]))
+            mindices = keys[np.where(keyind)]
+            if num_meas == 0:
+                cost_m = joint_cost[tindices, [tindices, cpreds + tindices]]
+            else:
+                cost_m = joint_cost[tindices, [tindices, cpreds + tindices, 2*cpreds+mindices]]
+            # cost_m = np.concatenate((joint_cost[tindices],
+            #                          joint_cost[cpreds+tindices],
+            #                          joint_cost[2*cpreds+mindices]))
             neg_log = -np.log(cost_m)
             m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)/ ss_w)
             m = int(m.item())
