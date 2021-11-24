@@ -1553,8 +1553,13 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     class _TabEntry:
         def __init__(self):
             self.label = ()  # time step born, index of birth model born from
-            self.probDensity = None  # must be a distribution class
+            # self.probDensity = None  # must be a distribution class
+            self.distrib_weights_hist = []  # weights of the probDensity
+            self.filt_states = []  # dictionary from filters save function
             self.meas_assoc_hist = []  # list indices into measurement list per time step
+
+            self.state_hist = []
+            self.cov_hist = []
 
             """ linear index corresponding to timestep, manually updated. Used
             to index things since timestep in label can have decimals."""
@@ -1574,10 +1579,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             self.label = ()
             self.meas_ind_hist = []
             self.b_time_index = None
+            self.states = []
+            self.covs = []
 
     def __init__(self, req_births=None, req_surv=None, req_upd=None,
                  gating_on=False, prune_threshold=10**-15, max_hyps=3000,
-                 decimal_places=2, **kwargs):
+                 decimal_places=2, save_measurements=True, **kwargs):
         self.req_births = req_births
         self.req_surv = req_surv
         self.req_upd = req_upd
@@ -1585,12 +1592,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self.prune_threshold = prune_threshold
         self.max_hyps = max_hyps
         self.decimal_places = decimal_places
+        self.save_measurements = save_measurements
 
         self._track_tab = []  # list of all possible tracks
         self._labels = []  # local copy for internal modification
         self._extractable_hists = []
         self._pred_timesteps = []
         self._cor_timesteps = []
+
+        self._filter = None
+        self._base_filter = None
 
         hyp0 = self._HypothesisHelper()
         hyp0.assoc_prob = 1
@@ -1645,10 +1656,34 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         return self._covs
 
     @property
+    def filter(self):
+        return self._filter
+
+    @filter.setter
+    def filter(self, val):
+        self._base_filter = deepcopy(val)
+        self._filter = val
+
+    @property
     def cardinality(self):
         """Cardinality estimate."""
         return np.argmax(self._card_dist)
 
+    def _init_filt_states(self, distrib):
+        filt_states = [None] * len(distrib.means)
+        states = [m.copy() for m in distrib.means]
+        if self.save_covs:
+            covs = [c.copy() for c in distrib.covariances]
+        else:
+            covs = []
+        weights = distrib.weights.copy()
+        for ii, cov in enumerate(distrib.covariances):
+            self._base_filter.cov = cov.copy()
+            filt_states[ii] = self._base_filter.save_filter_state()
+
+        return filt_states, weights, states, covs
+
+    # TODO: update this to init filter state
     def _gen_birth_tab(self, timestep):
         log_cost = []
         birth_tab = []
@@ -1656,7 +1691,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             cost = p / (1 - p)
             log_cost.append(-np.log(cost))
             entry = self._TabEntry()
-            entry.probDensity = deepcopy(distrib)
+            # entry.probDensity = deepcopy(distrib)
+            entry.state_hist = [None]
+            entry.cov_hist = [None]
+            entry.distrib_weights_hist = [None]
+            (entry.filt_states, entry.distrib_weights_hist[0], entry.state_hist[0],
+             entry.cov_hist[0]) = self._init_filt_states(distrib)
             entry.label = (round(timestep, self.decimal_places), ii)
             entry.time_index = self._time_index_cntr
             birth_tab.append(entry)
@@ -1678,24 +1718,47 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         return birth_hyps
 
-    def _predict_prob_density(self, timestep, probDensity, filt_args):
-        """Loops over probability distribution and preforms prediction."""
-        gm_tup = zip(probDensity.means,
-                     probDensity.covariances)
-        gm = GaussianMixture()
-        gm.weights = probDensity.weights.copy()
-        for ii, (m, P) in enumerate(gm_tup):
-            self.filter.cov = P
-            n_mean = self.filter.predict(timestep, m, **filt_args)
-            gm.covariances.append(self.filter.cov.copy())
-            gm.means.append(n_mean)
+    # TODO: can this be made more generic? (replace with inner_predict)
+    # def _predict_prob_density(self, timestep, probDensity, filt_args):
+    #     """Loops over probability distribution and preforms prediction."""
+    #     gm_tup = zip(probDensity.means,
+    #                  probDensity.covariances)
+    #     gm = GaussianMixture()
+    #     gm.weights = probDensity.weights.copy()
+    #     for ii, (m, P) in enumerate(gm_tup):
+    #         self.filter.cov = P
+    #         n_mean = self.filter.predict(timestep, m, **filt_args)
+    #         gm.covariances.append(self.filter.cov.copy())
+    #         gm.means.append(n_mean)
 
-        return gm
+    #     return gm
 
+    def _inner_predict(self, timestep, filt_state, state, filt_args):
+        self.filter.load_filter_state(filt_state)
+        new_s = self.filter.predict(timestep, state, **filt_args)
+        new_f_state = self.filter.save_filter_state()
+        if self.save_covs:
+            new_cov = self.filter.cov.copy()
+        else:
+            new_cov = None
+
+        return new_f_state, new_s, new_cov
+
+    # TODO: update this for filt_state
     def _predict_track_tab_entry(self, tab, timestep, filt_args):
         """Updates table entries probability density."""
         newTab = deepcopy(tab)
-        newTab.probDensity = self._predict_prob_density(timestep, tab.probDensity, filt_args)
+        new_f_states = [None] * len(newTab.filt_states)
+        new_s_hist = [None] * len(newTab.filt_states)
+        new_c_hist = [None] * len(newTab.filt_states)
+        for ii, (f_state, state) in enumerate(zip(newTab.filt_states, newTab.state_hist[-1])):
+            (new_f_states[ii], new_s_hist[ii],
+             new_c_hist[ii]) = self._inner_predict(timestep, f_state, state, filt_args)
+
+        newTab.filt_states = new_f_states
+        newTab.state_hist.append(new_s_hist)
+        newTab.cov_hist.append(new_c_hist)
+        newTab.distrib_weights_hist.append(newTab.distrib_weights_hist[-1].copy())
         return newTab
 
     def _gen_surv_tab(self, timestep, filt_args):
@@ -1852,32 +1915,62 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self._clean_predictions()
 
-    def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
-        """Loops over a probability distribution and preforms correction."""
-        gm = GaussianMixture()
-        for jj in range(0, len(probDensity.means)):
-            self.filter.cov = probDensity.covariances[jj]
-            state = probDensity.means[jj]
-            (mean, qz) = self.filter.correct(timestep, meas, state, **filt_args)
-            cov = self.filter.cov
-            w = qz * probDensity.weights[jj]
-            gm.means.append(mean)
-            gm.covariances.append(cov)
-            gm.weights.append(w)
-        lst = gm.weights
-        lst = [x + np.finfo(float).eps for x in lst]
-        gm.weights = lst
-        cost = sum(gm.weights)
-        for jj in range(0, len(gm.weights)):
-            gm.weights[jj] /= cost
+    # TODO: update this for filt_state (replaced by inner_correct)
+    # def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
+    #     """Loops over a probability distribution and preforms correction."""
+    #     gm = GaussianMixture()
+    #     for jj in range(0, len(probDensity.means)):
+    #         self.filter.cov = probDensity.covariances[jj]
+    #         state = probDensity.means[jj]
+    #         (mean, qz) = self.filter.correct(timestep, meas, state, **filt_args)
+    #         cov = self.filter.cov
+    #         w = qz * probDensity.weights[jj]
+    #         gm.means.append(mean)
+    #         gm.covariances.append(cov)
+    #         gm.weights.append(w)
+    #     lst = gm.weights
+    #     lst = [x + np.finfo(float).eps for x in lst]
+    #     gm.weights = lst
+    #     cost = sum(gm.weights)
+    #     for jj in range(0, len(gm.weights)):
+    #         gm.weights[jj] /= cost
 
-        return (gm, cost)
+    #     return (gm, cost)
 
+    def _inner_correct(self, timestep, meas, filt_state, distrib_weight, state, filt_args):
+        self.filter.load_filter_state(filt_state)
+        cor_state, likely = self.filter.correct(timestep, meas, state, **filt_args)
+        new_f_state = self.filter.save_filter_state()
+        new_s = cor_state
+        if self.save_covs:
+            new_c = self.filter.cov.copy()
+        else:
+            new_c = None
+        new_w = distrib_weight * likely
+
+        return new_f_state, new_s, new_c, new_w
+
+    # TODO: update this for filt_state
     def _correct_track_tab_entry(self, meas, tab, timestep, filt_args):
         newTab = deepcopy(tab)
-        newTab.probDensity, cost = self._correct_prob_density(timestep, meas,
-                                                              tab.probDensity,
+        new_f_states = [None] * len(newTab.filt_states)
+        new_s_hist = [None] * len(newTab.filt_states)
+        new_c_hist = [None] * len(newTab.filt_states)
+        new_w = [None] * len(newTab.filt_states)
+        for ii, (f_state, state, w) in enumerate(zip(newTab.filt_states,
+                                                     newTab.state_hist[-1],
+                                                     newTab.distrib_weights_hist[-1])):
+            (new_f_states[ii], new_s_hist[ii],
+             new_c_hist[ii], new_w[ii]) = self._inner_correct(timestep, meas,
+                                                              f_state, w, state,
                                                               filt_args)
+
+        newTab.filt_states = new_f_states
+        newTab.state_hist[-1] = new_s_hist
+        newTab.cov_hist[-1] = new_c_hist
+        new_w = [w + np.finfo(float).eps for w in new_w]
+        cost = np.sum(new_w).item()
+        newTab.distrib_weights_hist[-1] = [w / cost for w in new_w]
 
         return newTab, cost
 
@@ -2031,14 +2124,16 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         # gate measurements by tracks
         if self.gating_on:
-            means = []
-            covs = []
-            for ent in self._track_tab:
-                means.extend(ent.probDensity.means)
-                covs.extend(ent.probDensity.covariances)
-            meas = self._gate_meas(meas, means, covs)
+            warn('Gating not implemented yet. SKIPPING', RuntimeWarning)
+            # means = []
+            # covs = []
+            # for ent in self._track_tab:
+            #     means.extend(ent.probDensity.means)
+            #     covs.extend(ent.probDensity.covariances)
+            # meas = self._gate_meas(meas, means, covs)
 
-        self._meas_tab.append(deepcopy(meas))
+        if self.save_measurements:
+            self._meas_tab.append(deepcopy(meas))
         num_meas = len(meas)
 
         # missed detection tracks
@@ -2057,20 +2152,34 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._card_dist = self._calc_card_dist(self._hypotheses)
         self._clean_updates()
 
+    def _extract_helper(self, track):
+        states = [s_lst[np.argmax(w_lst)]
+                  for w_lst, s_lst in zip(track.distrib_weights_hist,
+                                          track.state_hist)]
+        covs = [c_lst[np.argmax(w_lst)]
+                for w_lst, c_lst in zip(track.distrib_weights_hist,
+                                        track.cov_hist)]
+
+        return states, covs
+
+    # TODO: modify this to account for filt_state?
     def _update_extract_hist(self, idx_cmp):
         used_meas_inds = [[]] * self._time_index_cntr
         used_labels = []
         new_extract_hists = [None] * len(self._hypotheses[idx_cmp].track_set)
-        for ii, ptr in enumerate(self._hypotheses[idx_cmp].track_set):
+        for ii, track in enumerate([self._track_tab[trk_ind]
+                                    for trk_ind in self._hypotheses[idx_cmp].track_set]):
             new_extract_hists[ii] = self._ExtractHistHelper()
-            new_extract_hists[ii].label = self._track_tab[ptr].label
-            new_extract_hists[ii].meas_ind_hist = self._track_tab[ptr].meas_assoc_hist.copy()
-            new_extract_hists[ii].b_time_index = self._track_tab[ptr].time_index
+            new_extract_hists[ii].label = track.label
+            new_extract_hists[ii].meas_ind_hist = track.meas_assoc_hist.copy()
+            new_extract_hists[ii].b_time_index = track.time_index
+            (new_extract_hists[ii].states,
+             new_extract_hists[ii].covs) = self._extract_helper(track)
 
-            used_labels.append(self._track_tab[ptr].label)
+            used_labels.append(track.label)
 
-            for t_inds_after_b, meas_ind in enumerate(self._track_tab[ptr].meas_assoc_hist):
-                tt = self._track_tab[ptr].time_index + t_inds_after_b
+            for t_inds_after_b, meas_ind in enumerate(new_extract_hists[ii].meas_ind_hist):
+                tt = new_extract_hists[ii].b_time_index + t_inds_after_b
                 if meas_ind is not None and meas_ind not in used_meas_inds[tt]:
                     used_meas_inds[tt].append(meas_ind)
 
@@ -2082,8 +2191,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
             for t_inds_after_b, meas_ind in enumerate(existing.meas_ind_hist):
                 tt = existing.b_time_index + t_inds_after_b
-                if meas_ind in used_meas_inds[tt]:
-                    used = True
+                used = meas_ind in used_meas_inds[tt]
+                if used:
                     break
 
             if not used:
@@ -2092,13 +2201,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._extractable_hists = [self._extractable_hists[ii] for ii in good_inds]
         self._extractable_hists.extend(new_extract_hists)
 
-    def _extract_helper(self, pd):
-        idx_trk = np.argmax(pd.weights)
-        new_state = pd.means[idx_trk]
-        new_cov = pd.covariances[idx_trk]
-
-        return new_state, new_cov
-
+    # TODO: update this for filt_state
     def extract_states(self, pred_args={}, cor_args={}, update=True,
                        calc_states=True):
         """Extracts the best state estimates.
@@ -2127,11 +2230,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             It can simply be called once after the end of the simulation. The
             default is true.
 
-        .. todo::
-            Improve the history tracking so it is not as convoluted and does
-            a better comparison for labels to protect against numerical issues
-            with floats in the timestamp.
-
         Returns
         -------
         idx_cmp : int
@@ -2143,8 +2241,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self._states = [[]] * self._time_index_cntr
         self._labels = [[]] * self._time_index_cntr
-        if self.save_covs:
-            self._covs = [[]] * self._time_index_cntr
+        self._covs = [[]] * self._time_index_cntr
 
         if len(tracks_per_hyp) == 0:
             return None
@@ -2155,34 +2252,17 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         if calc_states:
             for existing in self._extractable_hists:
-                b_time, b_idx = existing.label
-                pd = deepcopy(self.birth_terms[b_idx][0])
-
-                for t_inds_after_b, meas_ind in enumerate(existing.meas_ind_hist):
+                b_time_index = existing.b_time_index
+                for t_inds_after_b, (s, c) in enumerate(zip(existing.states, existing.covs)):
                     tt = existing.b_time_index + t_inds_after_b
-                    timestep = self._pred_timesteps[tt]
-                    pd = self._predict_prob_density(timestep, pd, pred_args)
-
-                    if meas_ind is not None:
-                        meas = self._meas_tab[tt][meas_ind].copy()
-                        pd = self._correct_prob_density(timestep, meas, pd, cor_args)[0]
-
-                    new_state, new_cov = self._extract_helper(pd)
-
-                    # may happen if filter fails so stop trying to extract track
-                    if new_state is None:
-                        break
-
                     if len(self._labels[tt]) == 0:
-                        self._states[tt] = [new_state]
+                        self._states[tt] = [s]
                         self._labels[tt] = [existing.label]
-                        if self.save_covs:
-                            self._covs[tt] = [new_cov]
+                        self._covs[tt] = [c]
                     else:
-                        self._states[tt].append(new_state)
+                        self._states[tt].append(s)
                         self._labels[tt].append(existing.label)
-                        if self.save_covs:
-                            self._covs[tt].append(new_cov)
+                        self._covs[tt].append(c)
 
         if not update and not calc_states:
             warn('Extracting states performed no actions')
@@ -2394,7 +2474,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         if rng is None:
             rng = rnd.default_rng(1)
 
-        plt_meas = meas_inds is not None
+        plt_meas = meas_inds is not None and self.save_measurements
         show_sig = sig_bnd is not None and self.save_covs
 
         s_lst = deepcopy(self.states)

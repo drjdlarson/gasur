@@ -395,7 +395,6 @@ def test_GLMB():  # noqa
     GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args, **RFS_base_args)
-    glmb.use_parallel_correct = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -773,13 +772,13 @@ if __name__ == "__main__":
     # test_PHD()
     # test_CPHD()
 
-    # test_GLMB()
+    test_GLMB()
 
     # test_STM_GLMB()
 
     # test_SMC_GLMB()
     # test_USMC_GLMB()
-    test_MCMC_USMC_GLMB()
+    # test_MCMC_USMC_GLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
