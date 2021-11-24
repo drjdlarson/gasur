@@ -565,8 +565,6 @@ def test_SMC_GLMB():  # noqa
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
     extract_kwargs = {'update': False, 'calc_states': True,
-                      'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args,
                       'pred_args': pred_args, 'cor_args': cor_args}
     glmb.extract_states(**extract_kwargs)
 
@@ -774,9 +772,9 @@ if __name__ == "__main__":
 
     # test_GLMB()
 
-    test_STM_GLMB()
+    # test_STM_GLMB()
 
-    # test_SMC_GLMB()
+    test_SMC_GLMB()
     # test_USMC_GLMB()
     # test_MCMC_USMC_GLMB()
 
