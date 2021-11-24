@@ -2221,7 +2221,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         if calc_states:
             for existing in self._extractable_hists:
-                b_time_index = existing.b_time_index
                 for t_inds_after_b, (s, c) in enumerate(zip(existing.states, existing.covs)):
                     tt = existing.b_time_index + t_inds_after_b
                     if len(self._labels[tt]) == 0:
@@ -2692,6 +2691,7 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         covs = [None] * len(distrib.means)
 
         weights = distrib.weights.copy()
+        self._base_filter.dof = distrib.dof
         for ii, scale in enumerate(distrib.scalings):
             self._base_filter.scale = scale.copy()
             filt_states[ii] = self._base_filter.save_filter_state()
