@@ -772,9 +772,9 @@ if __name__ == "__main__":
     # test_PHD()
     # test_CPHD()
 
-    test_GLMB()
+    # test_GLMB()
 
-    # test_STM_GLMB()
+    test_STM_GLMB()
 
     # test_SMC_GLMB()
     # test_USMC_GLMB()
