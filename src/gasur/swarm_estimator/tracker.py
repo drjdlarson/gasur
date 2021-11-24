@@ -1565,6 +1565,22 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             to index things since timestep in label can have decimals."""
             self.time_index = None
 
+        def setup(self, tab):
+            self.label = tab.label
+            # self.probDensity = None  # must be a distribution class
+            self.distrib_weights_hist = tab.distrib_weights_hist.copy()
+            self.filt_states = deepcopy(tab.filt_states)
+            self.meas_assoc_hist = tab.meas_assoc_hist.copy()
+
+            self.state_hist = tab.state_hist.copy()
+            self.cov_hist = tab.cov_hist.copy()
+
+            """ linear index corresponding to timestep, manually updated. Used
+            to index things since timestep in label can have decimals."""
+            self.time_index = tab.time_index
+
+            return self
+
     class _HypothesisHelper:
         def __init__(self):
             self.assoc_prob = 0
@@ -1747,7 +1763,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
     # TODO: update this for filt_state
     def _predict_track_tab_entry(self, tab, timestep, filt_args):
         """Updates table entries probability density."""
-        newTab = deepcopy(tab)
+        # newTab = deepcopy(tab)
+        newTab = self._TabEntry().setup(tab)
         new_f_states = [None] * len(newTab.filt_states)
         new_s_hist = [None] * len(newTab.filt_states)
         new_c_hist = [None] * len(newTab.filt_states)
@@ -1952,7 +1969,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     # TODO: update this for filt_state
     def _correct_track_tab_entry(self, meas, tab, timestep, filt_args):
-        newTab = deepcopy(tab)
+        # newTab = deepcopy(tab)
+        newTab = self._TabEntry().setup(tab)
         new_f_states = [None] * len(newTab.filt_states)
         new_s_hist = [None] * len(newTab.filt_states)
         new_c_hist = [None] * len(newTab.filt_states)
@@ -1979,7 +1997,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         up_tab = [None] * (num_meas + 1) * num_pred
 
         for ii, track in enumerate(self._track_tab):
-            up_tab[ii] = deepcopy(track)
+            # up_tab[ii] = deepcopy(track)
+            up_tab[ii] = self._TabEntry().setup(track)
             up_tab[ii].meas_assoc_hist.append(None)
 
         # measurement updated tracks
@@ -2084,7 +2103,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         for (ii, v) in zip(nnz_inds, [ii for ii in range(0, track_cnt)]):
             new_inds[ii] = v
 
-        new_tab = [deepcopy(self._track_tab[ii]) for ii in nnz_inds]
+        new_tab = [self._TabEntry().setup(self._track_tab[ii]) for ii in nnz_inds]
         new_hyps = []
         for(ii, hyp) in enumerate(self._hypotheses):
             if len(hyp.track_set) > 0:
