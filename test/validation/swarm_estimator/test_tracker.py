@@ -195,10 +195,9 @@ def _setup_usmc_glmb_double_int_birth(num_parts, rng):
             part = gdistrib.Particle()
             part.point = l_bnd + spread * rng.random(m.shape)
             part.uncertainty = cov.copy()
-            part.sigmaPoints = gdistrib.SigmaPoints(alpha=alpha, kappa=kappa,
-                                                    n=m.size)
-            part.sigmaPoints.init_weights()
+            part.sigmaPoints = gdistrib.SigmaPoints(alpha=alpha, kappa=kappa)
             part.sigmaPoints.update_points(part.point, part.uncertainty)
+            part.sigmaPoints.init_weights()
             distrib.add_particle(part, 1 / num_parts)
 
         birth_terms.append((distrib, p))
@@ -652,8 +651,6 @@ def test_USMC_GLMB():  # noqa
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
     extract_kwargs = {'update': False, 'calc_states': True,
-                      'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args,
                       'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
     glmb.extract_states(**extract_kwargs)
 
@@ -742,8 +739,6 @@ def test_MCMC_USMC_GLMB():  # noqa
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
     extract_kwargs = {'update': False, 'calc_states': True,
-                      'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args,
                       'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
     glmb.extract_states(**extract_kwargs)
 
@@ -774,9 +769,9 @@ if __name__ == "__main__":
 
     # test_STM_GLMB()
 
-    test_SMC_GLMB()
+    # test_SMC_GLMB()
     # test_USMC_GLMB()
-    # test_MCMC_USMC_GLMB()
+    test_MCMC_USMC_GLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
