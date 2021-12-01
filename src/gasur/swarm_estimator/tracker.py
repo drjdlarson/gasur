@@ -1613,7 +1613,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._extractable_hists = []
 
         self._filter = None
-        self._base_filter = None
+        self._baseFilter = None
 
         hyp0 = self._HypothesisHelper()
         hyp0.assoc_prob = 1
@@ -1674,7 +1674,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
     @filter.setter
     def filter(self, val):
-        self._base_filter = deepcopy(val)
+        self._baseFilter = deepcopy(val)
         self._filter = val
 
     @property
@@ -1690,9 +1690,12 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         else:
             covs = []
         weights = distrib.weights.copy()
-        for ii, cov in enumerate(distrib.covariances):
-            self._base_filter.cov = cov.copy()
-            filt_states[ii] = self._base_filter.save_filter_state()
+        for ii, (m, cov) in enumerate(zip(distrib.means, distrib.covariances)):
+            self._baseFilter.cov = cov.copy()
+            if (isinstance(self._baseFilter, gfilts.UnscentedKalmanFilter)
+                    or isinstance(self._baseFilter, gfilts.UKFGaussianScaleMixtureFilter)):
+                self._baseFilter.init_sigma_points(m)
+            filt_states[ii] = self._baseFilter.save_filter_state()
 
         return filt_states, weights, states, covs
 
@@ -2702,10 +2705,10 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         covs = [None] * len(distrib.means)
 
         weights = distrib.weights.copy()
-        self._base_filter.dof = distrib.dof
+        self._baseFilter.dof = distrib.dof
         for ii, scale in enumerate(distrib.scalings):
-            self._base_filter.scale = scale.copy()
-            filt_states[ii] = self._base_filter.save_filter_state()
+            self._baseFilter.scale = scale.copy()
+            filt_states[ii] = self._baseFilter.save_filter_state()
             if self.save_covs:
                 # no need to copy because cov is already a new object for the student's t-fitler
                 covs[ii] = self.filter.cov
@@ -2771,8 +2774,8 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         super().__init__(**kwargs)
 
     def _init_filt_states(self, distrib):
-        self._base_filter.init_from_dist(distrib, make_copy=True)
-        filt_states = [self._base_filter.save_filter_state(), ]
+        self._baseFilter.init_from_dist(distrib, make_copy=True)
+        filt_states = [self._baseFilter.save_filter_state(), ]
         states = [distrib.mean]
         if self.save_covs:
             covs = [distrib.covariance, ]
