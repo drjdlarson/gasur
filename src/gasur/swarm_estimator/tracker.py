@@ -2452,7 +2452,8 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         if rng is None:
             rng = rnd.default_rng(1)
 
-        plt_meas = meas_inds is not None and self.save_measurements
+        plt_meas = (meas_inds is not None and self.save_measurements
+                    and len(meas_inds) == 2)
         show_sig = sig_bnd is not None and self.save_covs
 
         s_lst = deepcopy(self.states)
@@ -2781,28 +2782,6 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         return filt_states, weights, states, covs
 
-    # def _predict_prob_density(self, timestep, probDensity, filt_args):
-    #     """Predicts the next probability density."""
-    #     if probDensity.num_particles > 0:
-    #         self.filter.init_from_dist(probDensity, make_copy=True)
-
-    #         self.filter.predict(timestep, **filt_args)
-
-    #         newProbDen = self.filter.extract_dist(make_copy=False)
-
-    #         ps = self.compute_prob_survive(newProbDen.particles, *self._prob_surv_args)
-    #         new_weights = [w * ps[ii] for ii, (p, w) in enumerate(newProbDen)]
-    #         tot = sum(new_weights)
-    #         if np.abs(tot) == np.inf:
-    #             w_lst = [np.inf] * len(new_weights)
-    #         else:
-    #             w_lst = [w / tot for w in new_weights]
-    #         newProbDen.update_weights(w_lst)
-    #     else:
-    #         newProbDen = deepcopy(probDensity)
-
-    #     return newProbDen
-
     def _calc_avg_prob_surv_death(self):
         avg_prob_survive = np.zeros(len(self._track_tab))
         for tabidx, ent in enumerate(self._track_tab):
@@ -2864,57 +2843,6 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         """
         self._prob_surv_args = prob_surv_args
         return super().predict(timestep, **kwargs)
-
-    # def _correct_prob_density(self, timestep, meas, probDensity, filt_args):
-    #     """Corrects the probability density and resamples."""
-    #     cost = 0
-    #     if probDensity.num_particles > 0:
-    #         self.filter.init_from_dist(probDensity, make_copy=True)
-    #         try:
-    #             meas_likely = self.filter.correct(timestep, meas, **filt_args)[1]
-
-    #             newProbDen = self.filter.extract_dist(make_copy=False)
-
-    #             # manually upate the weights to allow for probability of detection
-    #             pd = self.compute_prob_detection(newProbDen.particles,
-    #                                              *self._prob_det_args)
-    #             pd_weight = pd * np.array(newProbDen.weights) + np.finfo(float).eps
-    #             newProbDen.update_weights((pd_weight / np.sum(pd_weight)).tolist())
-
-    #             # determine the partial cost, the remainder is calculated later from
-    #             # the hypothesis
-    #             cost = np.sum(meas_likely * pd_weight)
-    #         except gerr.ParticleDepletionError:
-    #             newProbDen = self.filter.extract_dist(make_copy=False)
-    #     else:
-    #         newProbDen = deepcopy(probDensity)
-
-    #     return newProbDen, cost
-
-    # def _correct_track_tab_entry(self, meas, tab, timestep, filt_args):
-    #     if self.filter.require_copy_prop_parts:
-    #         if len(tab.prop_parts) == 0:
-    #             # assume this is a new birth and prob_parts hasn't been initialized
-    #             prop_parts = list(np.stack(tab.probDensity.particles).copy())
-    #         else:
-    #             prop_parts = list(np.stack(tab.prop_parts).copy())
-    #         self.filter.prop_parts = prop_parts
-
-    #     if self.filter.require_copy_can_dist:
-    #         if tab.candDist is None:
-    #             # this has only been initialized by the birth and not predicted
-    #             self.filter.candDist = deepcopy(tab.probDensity)
-    #         else:
-    #             self.filter.candDist = deepcopy(tab.candDist)
-    #     newTab, cost = super()._correct_track_tab_entry(meas, tab, timestep,
-    #                                                     filt_args)
-    #     if self.filter.require_copy_prop_parts:
-    #         newTab.prop_parts = self.filter.prop_parts
-
-    #     if self.filter.require_copy_can_dist:
-    #         newTab.candDist = self.filter.candDist
-
-    #     return newTab, cost
 
     def _calc_avg_prob_det_mdet(self):
         avg_prob_detect = np.zeros(len(self._track_tab))
@@ -2979,38 +2907,6 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         self._prob_det_args = prob_det_args
         return super().correct(timestep, meas, **kwargs)
 
-    # def _extract_helper(self, pd):
-    #     new_state = pd.mean
-    #     new_cov = pd.covariance
-    #     if new_state.size == 0:
-    #         new_state = None
-    #         new_cov = None
-
-    #     return new_state, new_cov
-
-    # def extract_states(self, prob_surv_args=(), prob_det_args=(), **kwargs):
-    #     """Extracts the state estimates.
-
-    #     This is a wrapper for the parent method to allow for extra arguments.
-    #     See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
-    #     for details.
-
-    #     Parameters
-    #     ----------
-    #     prob_surv_args : tuple, optional
-    #         Additional arguments for the `compute_prob_survive` function.
-    #         The default is ().
-    #     prob_det_args : tuple, optional
-    #         Additional arguments for the `compute_prob_detection` function.
-    #         The default is ().
-    #     **kwargs : dict, optional
-    #         See :meth:`.tracker.GeneralizedLabeledMultiBernoulli.extract_states`
-
-    #     """
-    #     self._prob_surv_args = prob_surv_args
-    #     self._prob_det_args = prob_det_args
-    #     return super().extract_states(**kwargs)
-
     def extract_most_prob_states(self, thresh, **kwargs):
         """Extracts themost probable states.
 
@@ -3023,3 +2919,15 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             Function must be implemented.
         """
         warn('Not implemented for this class')
+
+
+class GSMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    """Implementation of a GSM-GLMB filter.
+
+    The implementation of the GSM-GLMB fitler does not change for different core
+    filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use any
+    of the GSM inner filters from gncpy.filters
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
