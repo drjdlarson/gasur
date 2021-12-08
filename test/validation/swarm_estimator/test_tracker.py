@@ -674,8 +674,7 @@ def test_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'pred_args': pred_args, 'cor_args': cor_args,
-                      'update': False, 'calc_states': True}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     glmb.calculate_ospa(global_true, 2, 1)
@@ -736,8 +735,7 @@ def test_STM_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'pred_args': pred_args, 'cor_args': cor_args,
-                      'update': False, 'calc_states': True}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -819,8 +817,7 @@ def test_SMC_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'update': False, 'calc_states': True,
-                      'pred_args': pred_args, 'cor_args': cor_args}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -905,8 +902,7 @@ def test_USMC_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'update': False, 'calc_states': True,
-                      'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -992,8 +988,7 @@ def test_MCMC_USMC_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'update': False, 'calc_states': True,
-                      'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -1355,7 +1350,6 @@ def test_UKF_GSM_GLMB():  # noqa
     t0, t1 = 0, 20 + dt
     prob_detection = 0.99
     prob_survive = 0.98
-    use_sqkf = True
     print_interval = 10  # s
 
     # measurement noise parameters
