@@ -1635,6 +1635,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         Maximum number of hypotheses to keep when capping
     decimal_places : int
         Number of decimal places to keep in label. The default is 2.
+    save_measurements : bool
+        Flag indicating if measurments should be saved. Useful for some extra
+        plots.
     """
 
     class _TabEntry:
