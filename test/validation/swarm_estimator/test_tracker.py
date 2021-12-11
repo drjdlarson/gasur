@@ -767,6 +767,7 @@ def test_JGLMB():  # noqa
     rng = rnd.default_rng(global_seed)
 
     dt = 0.01
+    # t0, t1 = 0, 6 + dt
     t0, t1 = 0, 6 + dt
 
     filt = _setup_double_int_kf(dt)
@@ -775,14 +776,14 @@ def test_JGLMB():  # noqa
 
     b_model = _setup_gm_glmb_double_int_birth()
 
-    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.98,
+    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.99,
                      'in_filter': filt, 'birth_terms': b_model,
                      'clutter_den': 1**-7, 'clutter_rate': 1**-7}
-    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+    JGLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
-    glmb = tracker.JointGeneralizedLabeledMultiBernoulli(**GLMB_args,
-                                                         **RFS_base_args)
-    glmb.use_parallel_correct = True
+    jglmb = tracker.JointGeneralizedLabeledMultiBernoulli(**JGLMB_args,
+                                                          **RFS_base_args)
+    jglmb.use_parallel_correct = False
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -797,32 +798,32 @@ def test_JGLMB():  # noqa
         global_true.append(deepcopy(true_agents))
 
         pred_args = {'state_mat_args': state_mat_args}
-        glmb.predict(tt, filt_args=pred_args)
+        jglmb.predict(tt, filt_args=pred_args)
 
         meas_in = _gen_meas(tt, true_agents, filt.proc_noise, filt.meas_noise, rng)
 
         cor_args = {'meas_fun_args': meas_fun_args}
-        glmb.correct(tt, meas_in, filt_args=cor_args)
+        jglmb.correct(tt, meas_in, filt_args=cor_args)
 
         extract_kwargs = {'update': True, 'calc_states': False}
-        glmb.cleanup(extract_kwargs=extract_kwargs)
+        jglmb.cleanup(extract_kwargs=extract_kwargs)
 
     extract_kwargs = {'pred_args': pred_args, 'cor_args': cor_args,
                       'update': False, 'calc_states': True}
-    glmb.extract_states(**extract_kwargs)
+    jglmb.extract_states(**extract_kwargs)
 
-    glmb.calculate_ospa(global_true, 2, 1)
+    jglmb.calculate_ospa(global_true, 2, 1)
 
     if debug_plots:
-        glmb.plot_states_labels([0, 1], true_states=global_true,
+        jglmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
-        glmb.plot_card_dist()
-        glmb.plot_card_history(time_units='s', time=time)
-        glmb.plot_ospa_history()
+        jglmb.plot_card_dist()
+        jglmb.plot_card_history(time_units='s', time=time)
+        jglmb.plot_ospa_history()
 
     print('\tExpecting {} agents'.format(len(true_agents)))
 
-    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+    assert len(true_agents) == jglmb.cardinality, 'Wrong cardinality'
 
 
 # %% main
@@ -843,7 +844,8 @@ if __name__ == "__main__":
 
     # test_SMC_GLMB()
     # test_USMC_GLMB()
-    test_MCMC_USMC_GLMB()
+    # test_MCMC_USMC_GLMB()
+    test_JGLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
