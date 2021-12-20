@@ -145,6 +145,7 @@ def _setup_gm_glmb_double_int_birth():
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
     gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
 
+    # return [(gm0, 0.03), ]
     return [(gm0, 0.003), ]
 
 
@@ -452,7 +453,7 @@ def test_STM_GLMB():  # noqa
 
     b_model = _setup_stm_glmb_double_int_birth()
 
-    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.98,
+    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.99,
                      'in_filter': filt, 'birth_terms': b_model,
                      'clutter_den': 1**-7, 'clutter_rate': 1**-7}
     GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
@@ -776,9 +777,9 @@ def test_JGLMB():  # noqa
 
     b_model = _setup_gm_glmb_double_int_birth()
 
-    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.99,
+    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.98,
                      'in_filter': filt, 'birth_terms': b_model,
-                     'clutter_den': 1**-7, 'clutter_rate': 1**-7}
+                     'clutter_den': 1**-3, 'clutter_rate': 1**-3}
     JGLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     jglmb = tracker.JointGeneralizedLabeledMultiBernoulli(**JGLMB_args,
