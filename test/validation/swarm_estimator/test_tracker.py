@@ -132,6 +132,216 @@ def _setup_double_int_upf(dt, rng, use_MCMC):
     return filt
 
 
+def __gsm_import_dist_factory():
+    def import_dist_fnc(parts, rng):
+        new_parts = np.nan * np.ones(parts.particles.shape)
+
+        disc = 0.99
+        a = (3 * disc - 1) / (2 * disc)
+        h = np.sqrt(1 - a**2)
+        last_means = np.mean(parts.particles, axis=0)
+        means = a * parts.particles[:, 0:2] + (1 - a) * last_means[0:2]
+
+        # df, sig
+        for ind in range(means.shape[1]):
+            std = np.sqrt(h**2 * np.cov(parts.particles[:, ind]))
+
+            for ii, m in enumerate(means):
+                new_parts[ii, ind] = stats.norm.rvs(loc=m[ind], scale=std,
+                                                    random_state=rng)
+
+        for ii in range(new_parts.shape[0]):
+            new_parts[ii, 2] = stats.invgamma.rvs(np.abs(new_parts[ii, 0]) / 2,
+                                                  scale=1 / (2 / np.abs(new_parts[ii, 0])),
+                                                  random_state=rng)
+
+        return new_parts
+
+    return import_dist_fnc
+
+
+def _setup_qkf(dt, use_sqkf, m_vars):
+    state_mat = np.vstack((np.hstack((np.eye(2), dt * np.eye(2), dt**2 / 2 * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.eye(2), dt * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.zeros((2, 2)), np.eye(2)))))
+    proc_cov = np.diag((4, 4, 4, 4, 0.01, 0.01))
+
+    def meas_fun(t, x, *args):
+        return np.array([[np.sqrt(x[0, 0]**2 + x[1, 0]**2)],
+                         [np.arctan2(x[1, 0], x[0, 0])]])
+
+    # define base GSM parameters
+    if use_sqkf:
+        filt = gfilts.SquareRootQKF()
+    else:
+        filt = gfilts.QuadratureKalmanFilter()
+
+    filt.set_state_model(state_mat=state_mat)
+    filt.set_measurement_model(meas_fun=meas_fun)
+    filt.proc_noise = proc_cov
+    filt.meas_noise = np.diag(m_vars)
+
+    filt.points_per_axis = 3
+
+    return filt, state_mat, meas_fun
+
+
+def _setup_ukf(dt, m_vars):
+    state_mat = np.vstack((np.hstack((np.eye(2), dt * np.eye(2), dt**2 / 2 * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.eye(2), dt * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.zeros((2, 2)), np.eye(2)))))
+    proc_cov = np.diag((4, 4, 4, 4, 0.01, 0.01))
+
+    def meas_fun(t, x, *args):
+        return np.vstack((meas_fun_range(t, x),
+                          meas_fun_bearing(t, x)))
+
+    def meas_fun_range(t, x, *args):
+        return np.array([np.sqrt(x[0, 0]**2 + x[1, 0]**2)])
+
+    def meas_fun_bearing(t, x, *args):
+        return np.array([np.arctan2(x[1, 0], x[0, 0])])
+
+    # define filter parameters
+    filt = gfilts.UnscentedKalmanFilter()
+
+    filt.set_state_model(state_mat=state_mat)
+    filt.set_measurement_model(meas_fun_lst=[meas_fun_range, meas_fun_bearing])
+    filt.proc_noise = proc_cov
+    filt.meas_noise = np.diag(m_vars)
+
+    # define UKF specific parameters
+    filt.alpha = 0.5
+    filt.kappa = 1
+    filt.beta = 1.5
+
+    return filt, state_mat, meas_fun
+
+
+def __gsm_import_w_factory(inov_cov):
+    def import_w_fnc(meas, parts):
+        stds = np.sqrt(parts[:, 2] * parts[:, 1]**2 + inov_cov)
+        return np.array([stats.norm.pdf(meas.item(), scale=scale)
+                         for scale in stds])
+
+    return import_w_fnc
+
+
+def _setup_qkf_gsm(dt, rng, use_sqkf, m_dfs, m_vars):
+    state_mat = np.vstack((np.hstack((np.eye(2), dt * np.eye(2), dt**2 / 2 * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.eye(2), dt * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.zeros((2, 2)), np.eye(2)))))
+    proc_cov = np.diag((4, 4, 4, 4, 0.01, 0.01))
+
+    def meas_fun(t, x, *args):
+        return np.array([[np.sqrt(x[0, 0]**2 + x[1, 0]**2)],
+                         [np.arctan2(x[1, 0], x[0, 0])]])
+
+    # define base GSM parameters
+    if use_sqkf:
+        filt = gfilts.SQKFGaussianScaleMixtureFilter()
+    else:
+        filt = gfilts.QKFGaussianScaleMixtureFilter()
+
+    filt.set_state_model(state_mat=state_mat)
+    filt.proc_noise = proc_cov
+    filt.set_measurement_model(meas_fun=meas_fun)
+
+    # define measurement noise filters
+    num_parts = 500
+    bootstrap_lst = [None] * 2
+
+    # manually setup each bootstrap filter (stripped down PF)
+    for ind in range(len(bootstrap_lst)):
+        mf = gfilts.BootstrapFilter()
+        mf.importance_dist_fnc = __gsm_import_dist_factory()
+        mf.particleDistribution = gdistrib.SimpleParticleDistribution()
+        df_particles = stats.uniform.rvs(loc=1, scale=4, size=num_parts,
+                                         random_state=rng)
+        sig_particles = stats.uniform.rvs(loc=0, scale=5 * np.sqrt(m_vars[ind]),
+                                          size=num_parts, random_state=rng)
+        z_particles = np.nan * np.ones(num_parts)
+        for ii, v in enumerate(df_particles):
+            z_particles[ii] = stats.invgamma.rvs(v / 2, scale=1 / (2 / v),
+                                                 random_state=rng)
+        mf.particleDistribution.particles = np.stack((df_particles, sig_particles,
+                                                      z_particles), axis=1)
+
+        mf.particleDistribution.num_parts_per_ind = np.ones(num_parts)
+        mf.particleDistribution.weights = 1 / num_parts * np.ones(num_parts)
+        mf.rng = rng
+        bootstrap_lst[ind] = mf
+
+    importance_weight_factory_lst = [__gsm_import_w_factory] * len(bootstrap_lst)
+    filt.set_meas_noise_model(bootstrap_lst=bootstrap_lst,
+                              importance_weight_factory_lst=importance_weight_factory_lst)
+
+    # define QKF specific parameters for core filter
+    filt.points_per_axis = 3
+
+    return filt, state_mat, meas_fun
+
+
+def _setup_ukf_gsm(dt, rng, m_dfs, m_vars):
+    state_mat = np.vstack((np.hstack((np.eye(2), dt * np.eye(2), dt**2 / 2 * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.eye(2), dt * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.zeros((2, 2)), np.eye(2)))))
+    proc_cov = np.diag((4, 4, 4, 4, 0.01, 0.01))
+
+    def meas_fun(t, x, *args):
+        return np.vstack((meas_fun_range(t, x),
+                          meas_fun_bearing(t, x)))
+
+    def meas_fun_range(t, x, *args):
+        return np.array([np.sqrt(x[0, 0]**2 + x[1, 0]**2)])
+
+    def meas_fun_bearing(t, x, *args):
+        return np.array([np.arctan2(x[1, 0], x[0, 0])])
+
+    # define base GSM parameters
+    filt = gfilts.UKFGaussianScaleMixtureFilter()
+
+    filt.set_state_model(state_mat=state_mat)
+    filt.proc_noise = proc_cov
+    filt.set_measurement_model(meas_fun_lst=[meas_fun_range, meas_fun_bearing])
+
+    # define measurement noise filters
+    num_parts = 500
+    bootstrap_lst = [None] * 2
+
+    # manually setup each bootstrap filter (stripped down PF)
+    for ind in range(len(bootstrap_lst)):
+        mf = gfilts.BootstrapFilter()
+        mf.importance_dist_fnc = __gsm_import_dist_factory()
+        mf.particleDistribution = gdistrib.SimpleParticleDistribution()
+        df_particles = stats.uniform.rvs(loc=1, scale=4, size=num_parts,
+                                         random_state=rng)
+        sig_particles = stats.uniform.rvs(loc=0, scale=5 * np.sqrt(m_vars[ind]),
+                                          size=num_parts, random_state=rng)
+        z_particles = np.nan * np.ones(num_parts)
+        for ii, v in enumerate(df_particles):
+            z_particles[ii] = stats.invgamma.rvs(v / 2, scale=1 / (2 / v),
+                                                 random_state=rng)
+        mf.particleDistribution.particles = np.stack((df_particles, sig_particles,
+                                                      z_particles), axis=1)
+
+        mf.particleDistribution.num_parts_per_ind = np.ones(num_parts)
+        mf.particleDistribution.weights = 1 / num_parts * np.ones(num_parts)
+        mf.rng = rng
+        bootstrap_lst[ind] = mf
+
+    importance_weight_factory_lst = [__gsm_import_w_factory] * len(bootstrap_lst)
+    filt.set_meas_noise_model(bootstrap_lst=bootstrap_lst,
+                              importance_weight_factory_lst=importance_weight_factory_lst)
+
+    # define UKF specific parameters for core filter
+    filt.alpha = 0.5
+    filt.kappa = 1
+    filt.beta = 1.5
+
+    return filt, state_mat, meas_fun
+
+
 def _setup_phd_double_int_birth():
     mu = [np.array([10., 0., 0., 0.]).reshape((4, 1))]
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
@@ -196,15 +406,23 @@ def _setup_usmc_glmb_double_int_birth(num_parts, rng):
             part = gdistrib.Particle()
             part.point = l_bnd + spread * rng.random(m.shape)
             part.uncertainty = cov.copy()
-            part.sigmaPoints = gdistrib.SigmaPoints(alpha=alpha, kappa=kappa,
-                                                    n=m.size)
-            part.sigmaPoints.init_weights()
+            part.sigmaPoints = gdistrib.SigmaPoints(alpha=alpha, kappa=kappa)
             part.sigmaPoints.update_points(part.point, part.uncertainty)
+            part.sigmaPoints.init_weights()
             distrib.add_particle(part, 1 / num_parts)
 
         birth_terms.append((distrib, p))
 
     return birth_terms
+
+
+def _setup_gsm_birth():
+    # note: GSM filter assumes noise is conditionally Gaussian so use GM with 1 term for birth
+    means = [np.array([2000, 2000, 20, 20, 0, 0]).reshape((6, 1))]
+    cov = [np.diag((5 * 10**4, 5 * 10**4, 8, 8, 0.02, 0.02))]
+    gm0 = GaussianMixture(means=means, covariances=cov, weights=[1])
+
+    return [(gm0, 0.05), ]
 
 
 def _gen_meas(tt, true_agents, proc_noise, meas_noise, rng):
@@ -216,6 +434,30 @@ def _gen_meas(tt, true_agents, proc_noise, meas_noise, rng):
         meas_in.append(m.copy())
 
     return meas_in
+
+
+def _gen_meas_qkf(tt, true_agents, proc_noise, meas_fun, m_vars, rng):
+    meas_out = []
+    for x in true_agents:
+        xp = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
+        meas = meas_fun(tt, xp)
+        for ii, var in enumerate(m_vars):
+            meas[ii, 0] += stats.norm.rvs(scale=np.sqrt(var), random_state=rng)
+        meas_out.append(meas.copy())
+
+    return meas_out
+
+
+def _gen_meas_gsm(tt, true_agents, proc_noise, meas_fun, m_dfs, m_vars, rng):
+    meas_out = []
+    for x in true_agents:
+        xp = rng.multivariate_normal(x.flatten(), proc_noise).reshape(x.shape)
+        meas = meas_fun(tt, xp)
+        for ii, (df, var) in enumerate(zip(m_dfs, m_vars)):
+            meas[ii, 0] += stats.t.rvs(df, scale=np.sqrt(var), random_state=rng)
+        meas_out.append(meas.copy())
+
+    return meas_out
 
 
 def _prop_true(true_agents, tt, dt):
@@ -275,6 +517,19 @@ def _update_true_agents_prob_usmc(true_agents, tt, dt, b_model, rng):
         for distrib, w in b_model:
             print('birth at {:.2f}'.format(tt))
             out.append(distrib.mean.copy())
+
+    return out
+
+
+def _update_true_agents_gsm(true_agents, tt, b_model, rng, state_mat):
+    out = []
+    for existing in true_agents:
+        out.append(state_mat @ existing)
+
+    if any(np.abs(tt - np.array([5])) < 1e-8):
+        print('birth at {:.2f}'.format(tt))
+        gm = b_model[0][0]
+        out.append(gm.means[0].copy().reshape(gm.means[0].shape))
 
     return out
 
@@ -396,7 +651,6 @@ def test_GLMB():  # noqa
     GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args, **RFS_base_args)
-    glmb.use_parallel_correct = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -421,8 +675,7 @@ def test_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'pred_args': pred_args, 'cor_args': cor_args,
-                      'update': False, 'calc_states': True}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     glmb.calculate_ospa(global_true, 2, 1)
@@ -483,8 +736,7 @@ def test_STM_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'pred_args': pred_args, 'cor_args': cor_args,
-                      'update': False, 'calc_states': True}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -566,10 +818,7 @@ def test_SMC_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'update': False, 'calc_states': True,
-                      'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args,
-                      'pred_args': pred_args, 'cor_args': cor_args}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -582,7 +831,6 @@ def test_SMC_GLMB():  # noqa
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
 
-@pytest.mark.slow
 def test_USMC_GLMB():  # noqa
     print('Test USMC-GLMB')
 
@@ -655,10 +903,7 @@ def test_USMC_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'update': False, 'calc_states': True,
-                      'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args,
-                      'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -667,12 +912,11 @@ def test_USMC_GLMB():  # noqa
         glmb.plot_card_dist()
         glmb.plot_card_history(time_units='s', time=time)
     print('\tExpecting {} agents'.format(len(true_agents)))
-    print('max cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
 
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
 
-@pytest.mark.slow
 def test_MCMC_USMC_GLMB():  # noqa
     print('Test MCMC USMC-GLMB')
 
@@ -745,10 +989,7 @@ def test_MCMC_USMC_GLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         glmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'update': False, 'calc_states': True,
-                      'prob_surv_args': prob_surv_args,
-                      'prob_det_args': prob_det_args,
-                      'pred_args': filt_args_pred, 'cor_args': filt_args_cor}
+    extract_kwargs = {'update': False, 'calc_states': True}
     glmb.extract_states(**extract_kwargs)
 
     if debug_plots:
@@ -809,8 +1050,7 @@ def test_JGLMB():  # noqa
         extract_kwargs = {'update': True, 'calc_states': False}
         jglmb.cleanup(extract_kwargs=extract_kwargs)
 
-    extract_kwargs = {'pred_args': pred_args, 'cor_args': cor_args,
-                      'update': False, 'calc_states': True}
+    extract_kwargs = {'update': False, 'calc_states': True}
     jglmb.extract_states(**extract_kwargs)
 
     jglmb.calculate_ospa(global_true, 2, 1)
@@ -825,6 +1065,410 @@ def test_JGLMB():  # noqa
     print('\tExpecting {} agents'.format(len(true_agents)))
 
     assert len(true_agents) == jglmb.cardinality, 'Wrong cardinality'
+
+def test_QKF_GLMB():  # noqa
+    print('Test QKF-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    use_sqkf = False
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_vars = (100, (0.15 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_qkf(dt, use_sqkf, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                    **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_qkf(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+
+def test_SQKF_GLMB():  # noqa
+    print('Test SQKF-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    use_sqkf = True
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_vars = (100, (0.15 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_qkf(dt, use_sqkf, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                    **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_qkf(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('max cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+
+
+def test_UKF_GLMB():  # noqa
+    print('Test UKF-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_vars = (100, (0.15 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_ukf(dt, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                    **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_qkf(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+
+
+def test_QKF_GSM_GLMB():  # noqa
+    print('Test QKF GSM-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    use_sqkf = False
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_dfs = (2, 2)
+    m_vars = (25, (0.015 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_qkf_gsm(dt, filt_rng, use_sqkf, m_dfs, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GSMGeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                       **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_gsm(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_dfs, m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+
+
+def test_SQKF_GSM_GLMB():  # noqa
+    print('Test SQKF GSM-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    use_sqkf = True
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_dfs = (2, 2)
+    m_vars = (25, (0.015 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_qkf_gsm(dt, filt_rng, use_sqkf, m_dfs, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GSMGeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                       **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_gsm(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_dfs, m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+
+
+def test_UKF_GSM_GLMB():  # noqa
+    print('Test UKF GSM-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_dfs = (2, 2)
+    m_vars = (25, (0.015 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_ukf_gsm(dt, filt_rng, m_dfs, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GSMGeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                       **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_gsm(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_dfs, m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
 
 # %% main
@@ -847,6 +1491,14 @@ if __name__ == "__main__":
     # test_USMC_GLMB()
     # test_MCMC_USMC_GLMB()
     test_JGLMB()
+
+    # test_QKF_GLMB()
+    # test_SQKF_GLMB()
+    # test_UKF_GLMB()
+
+    # test_QKF_GSM_GLMB()
+    # test_SQKF_GSM_GLMB()
+    # test_UKF_GSM_GLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
