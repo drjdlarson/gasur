@@ -3118,6 +3118,8 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             neg_log = -np.log(cost_m)
             m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)/ ss_w)
             m = int(m.item())+1
+            # if num_meas == 0:
+            #     m = 1
 
             [assigns, costs] = gibbs(neg_log, m) # (rename)
             #this whole section may need to be redone or re-evaluated based on how indexing works in python vs matlab
