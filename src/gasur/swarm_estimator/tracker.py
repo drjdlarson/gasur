@@ -15,7 +15,7 @@ import abc
 from copy import deepcopy
 from warnings import warn
 
-from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
+from gasur.utilities.distributions import GaussianMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
 from gasur.utilities.sampling import gibbs
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
@@ -2858,9 +2858,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         return fig
 
 
-class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """Implementation of a STM-GLMB filter."""
-
+class _STMGLMBBase:
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -2910,23 +2908,16 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return [meas[ii] for ii in valid]
 
 
-class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """Implementation of a Sequential Monte Carlo GLMB filter.
+# Note: need inherited classes in this order for proper MRO
+class STMGeneralizedLabeledMultiBernoulli(_STMGLMBBase,
+                                          GeneralizedLabeledMultiBernoulli):
+    """Implementation of a STM-GLMB filter."""
 
-    This is based on :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
-    It does not account for agents spawned from existing tracks, only agents
-    birthed from the given birth model.
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    Attributes
-    ----------
-    compute_prob_detection : callable
-        Function that takes a list of particles as the first argument and `*args`
-        as the next. Returns the probability of detection for each particle as a list.
-    compute_prob_survive : callable
-        Function that takes a list of particles as the first argument and `*args` as
-        the next. Returns the average probability of survival for each particle as a list.
-    """
 
+class _SMCGLMBBase:
     def __init__(self, compute_prob_detection=None, compute_prob_survive=None,
                  **kwargs):
         self.compute_prob_detection = compute_prob_detection
@@ -3088,6 +3079,42 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         """
         warn('Not implemented for this class')
 
+
+# Note: need inherited classes in this order for proper MRO
+class SMCGeneralizedLabeledMultiBernoulli(_SMCGLMBBase,
+                                          GeneralizedLabeledMultiBernoulli):
+    """Implementation of a Sequential Monte Carlo GLMB filter.
+
+    This is based on :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
+    It does not account for agents spawned from existing tracks, only agents
+    birthed from the given birth model.
+
+    Attributes
+    ----------
+    compute_prob_detection : callable
+        Function that takes a list of particles as the first argument and `*args`
+        as the next. Returns the probability of detection for each particle as a list.
+    compute_prob_survive : callable
+        Function that takes a list of particles as the first argument and `*args` as
+        the next. Returns the average probability of survival for each particle as a list.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class GSMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    """Implementation of a GSM-GLMB filter.
+
+    The implementation of the GSM-GLMB fitler does not change for different core
+    filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use any
+    of the GSM inner filters from gncpy.filters
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
 class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def __init__(self, **kwargs):
@@ -3217,7 +3244,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         joint_cost = np.concatenate([np.diag(avg_death.flatten()),
                                      np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
 
-        other_jc_terms = np.matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
+        other_jc_terms = matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
 
         joint_cost = np.append(joint_cost, other_jc_terms, axis=1)
         
@@ -3228,7 +3255,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         #     joint_cost = np.concatenate([np.diag(avg_death.flatten()),
         #                                  np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
 
-        #     other_jc_terms = np.matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
+        #     other_jc_terms = matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
 
         #     joint_cost = np.append(joint_cost, other_jc_terms, axis=1)
 
@@ -3322,12 +3349,29 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         self._old_track_tab = self._track_tab
         dummythingfordebugging=1
 
-class GSMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """Implementation of a GSM-GLMB filter.
 
-    The implementation of the GSM-GLMB fitler does not change for different core
-    filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use any
-    of the GSM inner filters from gncpy.filters
+class STMJointGeneralizedLabeledMultiBernoulli(_STMGLMBBase,
+                                               JointGeneralizedLabeledMultiBernoulli):
+    """Implementation of a STM-JGLMB class."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class SMCJointGeneralizedLabeledMultiBernoulli(_SMCGLMBBase,
+                                               JointGeneralizedLabeledMultiBernoulli):
+    """Implementation of a SMC-JGLMB filter."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class GSMJointGeneralizedLabeledMultiBernoulli(JointGeneralizedLabeledMultiBernoulli):
+    """Implementation of a GSM-JGLMB filter.
+
+    The implementation of the GSM-JGLMB fitler does not change for different
+    core filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use
+    any of the GSM inner filters from gncpy.filters
     """
 
     def __init__(self, **kwargs):
