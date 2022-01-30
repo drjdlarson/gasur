@@ -2095,7 +2095,9 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                  new_c_hist[ii], new_w[ii]) = self._inner_correct(timestep, meas,
                                                                   f_state, w, state,
                                                                   filt_args)
-            except (gerr.ParticleDepletionError, gerr.ExtremeMeasurementNoiseError):
+            except (gerr.ParticleDepletionError,
+                    gerr.ParticleEstimationDomainError,
+                    gerr.ExtremeMeasurementNoiseError):
                 return None, 0
 
         newTab.filt_states = new_f_states
