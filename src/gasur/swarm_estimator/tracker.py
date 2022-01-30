@@ -4,7 +4,7 @@ This module contains the classes and data structures
 for RFS tracking related algorithms.
 """
 import numpy as np
-from numpy.linalg import cholesky, inv
+import numpy.linalg as la
 import numpy.random as rnd
 import numpy.matlib as matlib
 from scipy.optimize import linear_sum_assignment
@@ -14,14 +14,25 @@ import matplotlib.animation as animation
 import abc
 from copy import deepcopy
 from warnings import warn
+import enum
 
-from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
+from gasur.utilities.distributions import GaussianMixture
 from gasur.utilities.graphs import k_shortest, murty_m_best
 from gasur.utilities.sampling import gibbs
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 import gncpy.plotting as pltUtil
 import gncpy.filters as gfilts
 import gncpy.errors as gerr
+
+
+class OSPAMethod(enum.Enum):
+    EUCLIDEAN = enum.auto()
+    HELLINGER = enum.auto()
+    MAHALANOBIS = enum.auto()
+
+    def __str__(self):
+        """Return the enum name for strings."""
+        return self.name
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -80,12 +91,24 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.ospa = None
         self.ospa_localization = None
         self.ospa_cardinality = None
+        self._ospa_params = {}
 
         self._states = []  # local copy for internal modification
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._covs = []  # local copy for internal modification
 
         super().__init__(**kwargs)
+
+    @property
+    def ospa_method(self):
+        if 'core' in self._ospa_params:
+            return self._ospa_params['core']
+        else:
+            return None
+
+    @ospa_method.setter
+    def ospa_method(self, val):
+        warn('OSPA method is read only. SKIPPING')
 
     @abc.abstractmethod
     def save_filter_state(self):
@@ -119,6 +142,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         filt_state['_states'] = self._states
         filt_state['_meas_tab'] = self._meas_tab
         filt_state['_covs'] = self._covs
+        filt_state['_ospa_params'] = self._ospa_params
 
         return filt_state
 
@@ -154,6 +178,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self._states = filt_state['_states']
         self._meas_tab = filt_state['_meas_tab']
         self._covs = filt_state['_covs']
+        self._ospa_params = filt_state['_ospa_params']
 
     @property
     def prob_miss_detection(self):
@@ -244,8 +269,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             est = self.filter.get_est_meas(m, **est_meas_args)
             meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
             meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
-            v_s = cholesky(meas_pred_cov.T)
-            inv_sqrt_m_cov = inv(v_s)
+            v_s = la.cholesky(meas_pred_cov.T)
+            inv_sqrt_m_cov = la.inv(v_s)
 
             for (ii, z) in enumerate(meas):
                 if ii in valid:
@@ -258,7 +283,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         valid.sort()
         return [meas[ii] for ii in valid]
 
-    def calculate_ospa(self, truth, c, p):
+    def calculate_ospa(self, truth, c, p, core_method=None, true_covs=None):
         """Calculates the OSPA distance between the truth at all timesteps.
 
         Notes
@@ -284,22 +309,37 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             The power of the distance term. Higher values penalize outliers
             more.
         """
+        # error checking on optional input arguments
+        if core_method is None:
+            core_method = OSPAMethod.EUCLIDEAN
+        if core_method is OSPAMethod.MAHALANOBIS and not self.save_covs:
+            msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
+            warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
+            core_method = OSPAMethod.EUCLIDEAN
+        elif core_method is OSPAMethod.HELLINGER and true_covs is None:
+            msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
+            warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
+            core_method = OSPAMethod.EUCLIDEAN
+
+        if core_method is OSPAMethod.HELLINGER:
+            c = np.min([1, c]).item()
+
+        # setup data structuers
         num_timesteps = len(self._states)
-        self.ospa = np.nan * np.ones(num_timesteps)
         self.ospa_localization = np.nan * np.ones(num_timesteps)
         self.ospa_cardinality = np.nan * np.ones(num_timesteps)
+
+        # loop over every time step
         for ii, (x_lst, y_lst) in enumerate(zip(self._states, truth)):
             x_empty = x_lst is None or len(x_lst) == 0
             y_empty = y_lst is None or len(y_lst) == 0
 
             if x_empty and y_empty:
-                self.ospa[ii] = 0
                 self.ospa_localization[ii] = 0
                 self.ospa_cardinality[ii] = 0
                 continue
 
             if x_empty or y_empty:
-                self.ospa[ii] = c
                 self.ospa_localization[ii] = 0
                 self.ospa_cardinality[ii] = c
                 continue
@@ -316,8 +356,44 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             y_mat = np.tile(y, (1, x.shape[0])).reshape((n * m, y.shape[1]))
 
             # get distances and set cutoff
-            dists = np.sqrt(np.sum((x_mat - y_mat)**2, axis=1)).reshape((m, n))
-            dists = np.minimum(dists, c)**p
+            if core_method is OSPAMethod.EUCLIDEAN:
+                dists = np.sqrt(np.sum((x_mat - y_mat)**2,
+                                       axis=1))
+
+            elif core_method is OSPAMethod.HELLINGER:
+                dists = np.nan * np.ones(m * n)
+
+                cov_lst = self._covs[ii]
+                cov_mat = np.tile(cov_lst, (m, 1, 1))
+
+                t_cov_lst = true_covs[ii]
+                t_cov_mat = np.nan * np.ones((n * m, x.shape[1], x.shape[1]))
+                for jj in range(m):
+                    start = jj * n
+                    end = start + n
+                    t_cov_mat[start:end, :, :] = t_cov_lst[jj]
+
+                for jj, (_x, _y, _cov_x, _cov_y) in enumerate(zip(x_mat, y_mat, cov_mat, t_cov_mat)):
+                    diff = (_x - _y).reshape((_cov_x.shape[0], 1))
+                    _cov = _cov_x + _cov_y
+                    epsilon = -0.25 * diff.T @ la.inv(_cov) @ diff
+                    dists[jj] = 1 - np.sqrt(np.sqrt(la.det(_cov_x @ _cov_y))
+                                            / la.det(0.5 * _cov)) * np.exp(epsilon)
+
+            elif core_method is OSPAMethod.MAHALANOBIS:
+                cov_lst = self._covs[ii]
+                cov_mat = np.tile(cov_lst, (m, 1, 1))
+                dists = np.nan * np.ones(m * n)
+                for jj, (_x, _y, _cov) in enumerate(zip(x_mat, y_mat, cov_mat)):
+                    diff = (_x - _y).reshape((_cov.shape[0], 1))
+                    dists[jj] = np.sqrt(diff.T @ _cov @ diff)
+
+            else:
+                warn('OSPA method {} is not implemented. SKIPPING'.format(core_method))
+                core_method = None
+                break
+
+            dists = np.minimum(dists.reshape((m, n)), c)**p
 
             # use hungarian to find minimum distances for getting total cost
             row_ind, col_ind = linear_sum_assignment(dists)
@@ -327,9 +403,13 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             card_diff = np.abs(n - m)
             inv_p = 1 / p
             c_p = c**p
-            self.ospa[ii] = (inv_max_card * (c_p * card_diff + cost))**inv_p
             self.ospa_localization[ii] = (inv_max_card * cost)**inv_p
             self.ospa_cardinality[ii] = (inv_max_card * c_p * card_diff)**inv_p
+
+        self.ospa = self.ospa_localization + self.ospa_cardinality
+        self._ospa_params['core'] = core_method
+        self._ospa_params['cutoff'] = c
+        self._ospa_params['power'] = p
 
     def plot_ospa_history(self, time_units='index', time=None, **kwargs):
         """Plots the OSPA history.
@@ -372,7 +452,11 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         fig.axes[0].grid(True)
         fig.axes[0].plot(time, self.ospa)
 
-        pltUtil.set_title_label(fig, 0, opts, ttl="OSPA Metric",
+        fmt = '{:s} OSPA (c = {:.1f}, p = {:d})'
+        ttl = fmt.format(self._ospa_params['core'],
+                         self._ospa_params['cutoff'],
+                         self._ospa_params['power'])
+        pltUtil.set_title_label(fig, 0, opts, ttl=ttl,
                                 x_lbl='Time ({})'.format(time_units),
                                 y_lbl="OSPA")
         fig.tight_layout()
@@ -662,7 +746,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         while len(loop_inds) > 0:
             jj = np.argmax(self._gaussMix.weights)
             comp_inds = []
-            inv_cov = inv(self._gaussMix.covariances[jj])
+            inv_cov = la.inv(self._gaussMix.covariances[jj])
             for ii in loop_inds:
                 diff = self._gaussMix.means[ii] - self._gaussMix.means[jj]
                 val = diff.T @ inv_cov @ diff
@@ -2133,8 +2217,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     up_tab[s_to_ii].meas_assoc_hist.append(emm)
                 all_cost_m[ii, emm] = cost
         return up_tab, all_cost_m
-    
-    
 
     def _gen_cor_hyps(self, num_meas, avg_prob_detect, avg_prob_miss_detect,
                       all_cost_m):
@@ -2898,7 +2980,7 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             factor = self.filter.meas_noise_dof * (self.filter.dof - 2) \
                 / (self.filter.dof * (self.filter.meas_noise_dof - 2))
             P_zz = meas_mat @ p @ meas_mat.T + factor * self.filter.meas_noise
-            inv_P = inv(P_zz)
+            inv_P = la.inv(P_zz)
 
             for (ii, z) in enumerate(meas):
                 if ii in valid:
@@ -3094,11 +3176,11 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def __init__(self, **kwargs):
         self._old_track_tab = [] # used to store previous track table and initialize survival probability matrix
-    
+
         """ linear index corresponding to timestep, manually updated. Used
             to index things since timestep in label can have decimals. Must
             be updated once per time step."""
-    
+
         super().__init__(**kwargs)
 
     def predict(self, timestep, filt_args={}):
@@ -3131,7 +3213,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         keyind = np.not_equal(difference, 0)
         mindices = (keys[0][np.where(keyind)]).astype(int)
         return mindices
-    
+
     def _gen_cor_tab(self, num_meas, meas, timestep, filt_args):
         num_pred = len(self._track_tab)
         up_tab = [None] * (num_meas + 1) * num_pred
@@ -3171,7 +3253,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         # self._cor_timesteps.append(timestep)
         # gating by tracks
-        
+
         if self.gating_on:
             RuntimeError('Gating not implemented yet. PLEASE TURN OFF GATING')
             # for ent in self._track_tab:
@@ -3211,7 +3293,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         # wrong here because the filter is getting the best possible estimate,
         # but there's a lack of time_index which communicates some issues.
         # Could also be a problem with the meas_assoc_hist thing, but probably not.
-        
+
         [up_tab, all_cost_m] = self._gen_cor_tab(num_meas, meas, timestep, filt_args)
 
         clutter = self.clutter_rate * self.clutter_den
@@ -3222,7 +3304,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         other_jc_terms = np.matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
 
         joint_cost = np.append(joint_cost, other_jc_terms, axis=1)
-        
+
         # if num_meas == 0:
         #     joint_cost = np.concatenate([np.diag(avg_death.flatten()),
         #                                  np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
@@ -3266,7 +3348,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             for ind in tindices:
                 cost_m[cmi,:] = joint_cost[ind, np.append(np.append(tindices, cpreds + tindices), [2 * cpreds + mindices])]
                 cmi = cmi + 1
-                
+
             # if num_meas == 0:
             #     cost_m = joint_cost[tindices, [tindices, cpreds + tindices]].T
             # else:
@@ -3297,7 +3379,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             assigns[assigns >= 2*num_tracks-1] = assigns[assigns >= 2*num_tracks-1]-(2*num_tracks)
             if assigns[assigns>=0].size != 0:
                 assigns[assigns>=0] = mindices[assigns.astype(int)[assigns.astype(int)>=0]]
-            dummydebug2 = 1    
+            dummydebug2 = 1
             # for c in range(0, len(costs)):
             for c, cst in enumerate(costs.flatten()):
                 update_hyp_cmp_temp = assigns[c, ]

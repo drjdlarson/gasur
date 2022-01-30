@@ -621,6 +621,7 @@ def test_PHD():  # noqa
                      'clutter_den': 1**-7, 'clutter_rate': 1**-7}
     phd = tracker.ProbabilityHypothesisDensity(**RFS_base_args)
     phd.gating_on = False
+    phd.save_covs = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -641,7 +642,14 @@ def test_PHD():  # noqa
 
         phd.cleanup()
 
-    phd.calculate_ospa(global_true, 2, 1)
+    true_covs = []
+    for ii, lst in enumerate(global_true):
+        true_covs.append([])
+        for jj in lst:
+            true_covs[ii].append(5 * np.eye(4))
+
+    phd.calculate_ospa(global_true, 2, 1, core_method=tracker.OSPAMethod.HELLINGER,
+                       true_covs=true_covs)
 
     if debug_plots:
         phd.plot_states([0, 1])
@@ -1616,10 +1624,10 @@ if __name__ == "__main__":
 
     start = timer()
 
-    # test_PHD()
+    test_PHD()
     # test_CPHD()
 
-    test_GLMB()
+    # test_GLMB()
     # test_STM_GLMB()
     # test_SMC_GLMB()
     # test_USMC_GLMB()
