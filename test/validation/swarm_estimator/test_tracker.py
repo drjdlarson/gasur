@@ -18,7 +18,7 @@ global_seed = 69
 debug_plots = False
 
 _meas_mat = np.array([[1, 0, 0, 0],
-                      [0, 1, 0, 0]])
+                      [0, 1, 0, 0]], dtype=np.float64)
 
 
 def _state_mat_fun(t, dt, useless):
@@ -26,7 +26,7 @@ def _state_mat_fun(t, dt, useless):
     return np.array([[1., 0, dt, 0],
                      [0., 1., 0, dt],
                      [0, 0, 1., 0],
-                     [0, 0, 0, 1]])
+                     [0, 0, 0, 1.]])
 
 
 def _meas_mat_fun(t, useless):
@@ -692,7 +692,7 @@ def test_CPHD():  # noqa
     phd.calculate_ospa(global_true, 2, 1)
 
     if debug_plots:
-        phd.plot_card_time_hist(time_vec=time)
+        phd.plot_card_history(time_vec=time)
         phd.plot_states([0, 1])
         phd.plot_ospa_history(time=time, time_units='s')
 
@@ -1619,14 +1619,13 @@ if __name__ == "__main__":
     # test_PHD()
     # test_CPHD()
 
-    # test_GLMB()
-
+    test_GLMB()
     # test_STM_GLMB()
-
     # test_SMC_GLMB()
     # test_USMC_GLMB()
     # test_MCMC_USMC_GLMB()
-    test_JGLMB()
+
+    # test_JGLMB()
 
     # test_QKF_GLMB()
     # test_SQKF_GLMB()
@@ -1635,7 +1634,7 @@ if __name__ == "__main__":
     # test_QKF_GSM_GLMB()
     # test_SQKF_GSM_GLMB()
     # test_UKF_GSM_GLMB()
-    test_EKF_GSM_GLMB()
+    # test_EKF_GSM_GLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
