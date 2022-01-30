@@ -18,7 +18,7 @@ global_seed = 69
 debug_plots = False
 
 _meas_mat = np.array([[1, 0, 0, 0],
-                      [0, 1, 0, 0]])
+                      [0, 1, 0, 0]], dtype=np.float64)
 
 
 def _state_mat_fun(t, dt, useless):
@@ -26,7 +26,7 @@ def _state_mat_fun(t, dt, useless):
     return np.array([[1., 0, dt, 0],
                      [0., 1., 0, dt],
                      [0, 0, 1., 0],
-                     [0, 0, 0, 1]])
+                     [0, 0, 0, 1.]])
 
 
 def _meas_mat_fun(t, useless):
@@ -342,6 +342,74 @@ def _setup_ukf_gsm(dt, rng, m_dfs, m_vars):
     return filt, state_mat, meas_fun
 
 
+def _setup_ekf_gsm(dt, rng, m_dfs, m_vars):
+    state_mat = np.vstack((np.hstack((np.eye(2), dt * np.eye(2), dt**2 / 2 * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.eye(2), dt * np.eye(2))),
+                          np.hstack((np.zeros((2, 2)), np.zeros((2, 2)), np.eye(2)))))
+    proc_cov = np.diag((4, 4, 4, 4, 0.01, 0.01))
+
+    def meas_fun(t, x, *args):
+        return np.vstack((meas_fun_range(t, x),
+                          meas_fun_bearing(t, x)))
+
+    def meas_fun_range(t, x, *args):
+        return np.array([np.sqrt(x[0, 0]**2 + x[1, 0]**2)])
+
+    def meas_fun_bearing(t, x, *args):
+        return np.array([np.arctan2(x[1, 0], x[0, 0])])
+
+    # define base GSM parameters
+    filt = gfilts.EKFGaussianScaleMixtureFilter()
+
+    def _x_dot(t, x, *args):
+        return x[2]
+
+    def _y_dot(t, x, *args):
+        return x[3]
+
+    def _x_ddot(t, x, *args):
+        return x[4]
+
+    def _y_ddot(t, x, *args):
+        return x[5]
+
+    def _x_dddot(t, x, *args):
+        return 0
+
+    def _y_dddot(t, x, *args):
+        return 0
+
+    ode_lst = [_x_dot, _y_dot, _x_ddot, _y_ddot, _x_dddot, _y_dddot]
+
+    filt.set_state_model(ode_lst=ode_lst)
+    filt.proc_noise = proc_cov
+    filt.set_measurement_model(meas_fun_lst=[meas_fun_range, meas_fun_bearing])
+    filt.cov = np.diag((5 * 10**4, 5 * 10**4, 8, 8, 0.02, 0.02))
+
+    # define measurement noise filters
+    num_parts = 500
+
+    range_gsm = gdistrib.GaussianScaleMixture(gsm_type=gdistrib.GSMTypes.STUDENTS_T,
+                                              degrees_of_freedom=m_dfs[0],
+                                              df_range=(1, 5),
+                                              scale=np.sqrt(m_vars[0]).reshape((1, 1)),
+                                              scale_range=(0, 5 * np.sqrt(m_vars[0])))
+
+    bearing_gsm = gdistrib.GaussianScaleMixture(gsm_type=gdistrib.GSMTypes.STUDENTS_T,
+                                                degrees_of_freedom=m_dfs[1],
+                                                df_range=(1, 5),
+                                                scale=np.sqrt(m_vars[1]).reshape((1, 1)),
+                                                scale_range=(0, 5 * np.sqrt(m_vars[1])))
+
+    filt.set_meas_noise_model(gsm_lst=[range_gsm, bearing_gsm], num_parts=num_parts,
+                              rng=rng)
+
+    # set EKF specific settings
+    filt.dt = dt
+
+    return filt, state_mat, meas_fun
+
+
 def _setup_phd_double_int_birth():
     mu = [np.array([10., 0., 0., 0.]).reshape((4, 1))]
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
@@ -624,7 +692,7 @@ def test_CPHD():  # noqa
     phd.calculate_ospa(global_true, 2, 1)
 
     if debug_plots:
-        phd.plot_card_time_hist(time_vec=time)
+        phd.plot_card_history(time_vec=time)
         phd.plot_states([0, 1])
         phd.plot_ospa_history(time=time, time_units='s')
 
@@ -1022,7 +1090,7 @@ def test_JGLMB():  # noqa
                      'in_filter': filt, 'birth_terms': b_model,
                      'clutter_den': 1**-3, 'clutter_rate': 1**-3}
     JGLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
-                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     jglmb = tracker.JointGeneralizedLabeledMultiBernoulli(**JGLMB_args,
                                                           **RFS_base_args)
     jglmb.use_parallel_correct = False
@@ -1057,7 +1125,7 @@ def test_JGLMB():  # noqa
 
     if debug_plots:
         jglmb.plot_states_labels([0, 1], true_states=global_true,
-                                meas_inds=[0, 1])
+                                 meas_inds=[0, 1])
         jglmb.plot_card_dist()
         jglmb.plot_card_history(time_units='s', time=time)
         jglmb.plot_ospa_history()
@@ -1471,6 +1539,74 @@ def test_UKF_GSM_GLMB():  # noqa
     assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
 
 
+def test_EKF_GSM_GLMB():  # noqa
+    print('Test EKF GSM-GLMB')
+
+    rng = rnd.default_rng(global_seed)
+    filt_rng = rnd.default_rng(global_seed)
+
+    dt = 1  # s
+    t0, t1 = 0, 20 + dt
+    prob_detection = 0.99
+    prob_survive = 0.98
+    print_interval = 10  # s
+
+    # measurement noise parameters
+    m_dfs = (2, 2)
+    m_vars = (25, (0.015 * np.pi / 180)**2)
+
+    filt, state_mat, meas_fun = _setup_ekf_gsm(dt, filt_rng, m_dfs, m_vars)
+    b_model = _setup_gsm_birth()
+
+    RFS_base_args = {'prob_detection': prob_detection,
+                     'prob_survive': prob_survive, 'in_filter': filt,
+                     'birth_terms': b_model, 'clutter_den': 1**-7,
+                     'clutter_rate': 1**-7}
+    GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                 'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    glmb = tracker.GSMGeneralizedLabeledMultiBernoulli(**GLMB_args,
+                                                       **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, int(print_interval / dt)) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_gsm(true_agents, tt, b_model, rng,
+                                              state_mat)
+        global_true.append(deepcopy(true_agents))
+
+        filt_args_pred = {}
+        glmb.predict(tt, filt_args=filt_args_pred)
+
+        meas_in = _gen_meas_gsm(tt, true_agents, filt.proc_noise, meas_fun,
+                                m_dfs, m_vars, rng)
+
+        filt_args_cor = {}
+        glmb.correct(tt, meas_in, filt_args=filt_args_cor)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        glmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    glmb.extract_states(**extract_kwargs)
+
+    if debug_plots:
+        glmb.plot_states_labels([0, 1], true_states=global_true,
+                                meas_inds=[])
+        glmb.plot_card_dist()
+        glmb.plot_card_history(time_units='s', time=time)
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+    print('\tmax cardinality {}'.format(np.max([len(s_set) for s_set in glmb.states])))
+
+    assert len(true_agents) == glmb.cardinality, 'Wrong cardinality'
+
+
 # %% main
 if __name__ == "__main__":
     from timeit import default_timer as timer
@@ -1483,14 +1619,13 @@ if __name__ == "__main__":
     # test_PHD()
     # test_CPHD()
 
-    # test_GLMB()
-
+    test_GLMB()
     # test_STM_GLMB()
-
     # test_SMC_GLMB()
     # test_USMC_GLMB()
     # test_MCMC_USMC_GLMB()
-    test_JGLMB()
+
+    # test_JGLMB()
 
     # test_QKF_GLMB()
     # test_SQKF_GLMB()
@@ -1499,6 +1634,7 @@ if __name__ == "__main__":
     # test_QKF_GSM_GLMB()
     # test_SQKF_GSM_GLMB()
     # test_UKF_GSM_GLMB()
+    # test_EKF_GSM_GLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
