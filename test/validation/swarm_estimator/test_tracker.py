@@ -646,14 +646,27 @@ def test_PHD():  # noqa
     for ii, lst in enumerate(global_true):
         true_covs.append([])
         for jj in lst:
-            true_covs[ii].append(5 * np.eye(4))
+            true_covs[ii].append(np.diag([7e-5, 7e-5, 0.1, 0.1]))
 
-    phd.calculate_ospa(global_true, 2, 1, core_method=tracker.OSPAMethod.HELLINGER,
+    phd.calculate_ospa(global_true, 5, 1)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    phd.calculate_ospa(global_true, 5, 1, core_method=tracker.OSPAMethod.MANHATTAN)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    phd.calculate_ospa(global_true, 1, 1, core_method=tracker.OSPAMethod.HELLINGER,
                        true_covs=true_covs)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    phd.calculate_ospa(global_true, 5, 1, core_method=tracker.OSPAMethod.MAHALANOBIS)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
 
     if debug_plots:
         phd.plot_states([0, 1])
-        phd.plot_ospa_history(time=time, time_units='s')
 
     assert len(true_agents) == phd.cardinality, 'Wrong cardinality'
 
@@ -755,13 +768,18 @@ def test_GLMB():  # noqa
     glmb.extract_states(**extract_kwargs)
 
     glmb.calculate_ospa(global_true, 2, 1)
+    if debug_plots:
+        glmb.plot_ospa_history(time=time, time_units='s')
+
+    glmb.calculate_ospa2(global_true, 5, 1, 10)
+    if debug_plots:
+        glmb.plot_ospa2_history(time=time, time_units='s')
 
     if debug_plots:
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
         glmb.plot_card_history(time_units='s', time=time)
-        glmb.plot_ospa_history()
 
     print('\tExpecting {} agents'.format(len(true_agents)))
 
@@ -1624,10 +1642,10 @@ if __name__ == "__main__":
 
     start = timer()
 
-    test_PHD()
+    # test_PHD()
     # test_CPHD()
 
-    # test_GLMB()
+    test_GLMB()
     # test_STM_GLMB()
     # test_SMC_GLMB()
     # test_USMC_GLMB()

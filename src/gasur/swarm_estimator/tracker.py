@@ -26,9 +26,47 @@ import gncpy.errors as gerr
 
 
 class OSPAMethod(enum.Enum):
+    """Enumeration for distance methods used in the OSPA calculation."""
+
+    MANHATTAN = enum.auto()
+    r"""Calculate the Manhattan/taxicab/:math:`\L_1` distance.
+
+    Notes
+    -----
+    Uses the form
+    .. math::
+        d^{(c)} = \Sigma_i \abs{x_i - y_i}
+    """
+
     EUCLIDEAN = enum.auto()
+    r"""Calculate the euclidean distance between two points.
+
+    Notes
+    -----
+    Uses the form :math:`d^{(c)} = \sqrt{(x-y)^T(x-y)}`.
+    """
+
     HELLINGER = enum.auto()
+    r"""Calculate the hellinger distance between two probability distributions.
+
+    Notes
+    -----
+    It is at most 1, and for Gaussian distributions it takes the form
+
+    .. math::
+        d_H(f,g) &= 1 - \sqrt{\frac{\sqrt{\det{\left[\Sigma_x \Sigma_y\right]}}}
+                              {\det{\left[0.5\Sigma\right]}}} \exp{\epsilon} \\
+        \epsilon &= \frac{1}{4}(x - y)^T\Sigma^{-1}(x - y) \\
+        \Sigma &= \Sigma_x + \Sigma_y
+    """
+
     MAHALANOBIS = enum.auto()
+    r"""Calculate the Mahalanobis distance between a point and a distribution.
+
+    Notes
+    -----
+    Uses the form :math:`d^{(c)} = \sqrt{(x-y)^T\Sigma_y^{-1}(x-y)}`.
+    """
 
     def __str__(self):
         """Return the enum name for strings."""
@@ -101,6 +139,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
     @property
     def ospa_method(self):
+        """The distance metric used in the OSPA calculation (read only)."""
         if 'core' in self._ospa_params:
             return self._ospa_params['core']
         else:
@@ -283,7 +322,66 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         valid.sort()
         return [meas[ii] for ii in valid]
 
-    def calculate_ospa(self, truth, c, p, core_method=None, true_covs=None):
+    def _ospa_setup_tmat(self, truth, state_dim, true_covs):
+        # get sizes
+        num_timesteps = len(truth)
+        num_objs = 0
+
+        for lst in truth:
+            num_objs = np.max([num_objs,
+                               np.sum([_x is not None for _x in lst]).astype(int)])
+
+        # create matrices
+        true_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
+        t_exists = False * np.ones((num_objs, num_timesteps))
+        true_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
+                                         num_objs))
+
+        for tt, lst in enumerate(truth):
+            for obj_num, s in enumerate(lst):
+                t_exists[obj_num, tt] = s is not None
+                if t_exists[obj_num, tt]:
+                    true_mat[:, tt, obj_num] = s.ravel()
+
+        if true_covs is not None:
+            for tt, lst in enumerate(true_covs):
+                for obj_num, c in enumerate(lst):
+                    if c is not None:
+                        true_cov_mat[:, :, tt, obj_num] = c
+
+        return true_mat, t_exists, true_cov_mat
+
+    def _ospa_setup_emat(self, state_dim):
+        # get sizes
+        num_timesteps = len(self._states)
+        num_objs = 0
+
+        for lst in self._states:
+            num_objs = np.max([num_objs,
+                               np.sum([_x is not None for _x in lst]).astype(int)])
+
+        # create matrices
+        est_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
+        e_exists = False * np.ones((num_objs, num_timesteps))
+        est_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
+                                        num_objs))
+
+        for tt, lst in enumerate(self._states):
+            for obj_num, s in enumerate(lst):
+                e_exists[obj_num, tt] = s is not None
+                if e_exists[obj_num, tt]:
+                    est_mat[:, tt, obj_num] = s.ravel()
+
+        if self.save_covs:
+            for tt, lst in enumerate(self._covs):
+                for obj_num, c in enumerate(lst):
+                    if c is not None:
+                        est_cov_mat[:, :, tt, obj_num] = c
+
+        return est_mat, e_exists, est_cov_mat
+
+    def calculate_ospa(self, truth, c, p, use_empty=True, core_method=None,
+                       true_covs=None, record_params=True):
         """Calculates the OSPA distance between the truth at all timesteps.
 
         Notes
@@ -294,7 +392,12 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         :cite:`Schuhmacher2008_AConsistentMetricforPerformanceEvaluationofMultiObjectFilters`
         with much of the math defined in
         :cite:`Schuhmacher2008_ANewMetricbetweenDistributionsofPointProcesses`.
-        A value is calculated for each timestep available in the data.
+        A value is calculated for each timestep available in the data. This can
+        use different distance metrics as the core distance. The default follows
+        the main paper where the euclidean distance is used. Other options
+        include the Hellinger distance
+        (see :cite:`Nagappa2011_IncorporatingTrackUncertaintyintotheOSPAMetric`),
+        or the Mahalanobis distance.
 
         Parameters
         ----------
@@ -308,14 +411,25 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         p : int
             The power of the distance term. Higher values penalize outliers
             more.
+        core_method : :class:`OSPAMethod`, Optional
+            The main distance measure to use for the localization component.
+            The default value of None implies :attr:`.OSPAMethod.EUCLIDEAN`.
+        true_covs : list, Optional
+            Each element represents a timestep and is a list of N x N numpy arrays
+            corresonponding to the uncertainty about the true states. Note the
+            order must be consistent with the truth data given. This is only
+            needed for core methods :attr:`OSPAMethod.HELLINGER`. The defautl
+            value is None.
         """
         # error checking on optional input arguments
         if core_method is None:
             core_method = OSPAMethod.EUCLIDEAN
-        if core_method is OSPAMethod.MAHALANOBIS and not self.save_covs:
+
+        elif core_method is OSPAMethod.MAHALANOBIS and not self.save_covs:
             msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
             warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
             core_method = OSPAMethod.EUCLIDEAN
+
         elif core_method is OSPAMethod.HELLINGER and true_covs is None:
             msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
             warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
@@ -325,93 +439,190 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             c = np.min([1, c]).item()
 
         # setup data structuers
-        num_timesteps = len(self._states)
-        self.ospa_localization = np.nan * np.ones(num_timesteps)
-        self.ospa_cardinality = np.nan * np.ones(num_timesteps)
+        state_dim = None
+        for lst in truth:
+            for _x in lst:
+                if _x is not None:
+                    state_dim = _x.size
+                    break
+            if state_dim is not None:
+                break
 
-        # loop over every time step
-        for ii, (x_lst, y_lst) in enumerate(zip(self._states, truth)):
-            x_empty = x_lst is None or len(x_lst) == 0
-            y_empty = y_lst is None or len(y_lst) == 0
+        if state_dim is None:
+            for lst in self._states:
+                for _x in lst:
+                    if _x is not None:
+                        state_dim = _x.size
+                        break
+                if state_dim is not None:
+                    break
 
-            if x_empty and y_empty:
-                self.ospa_localization[ii] = 0
-                self.ospa_cardinality[ii] = 0
-                continue
+        true_mat, t_exists, true_cov_mat = self._ospa_setup_tmat(truth, state_dim,
+                                                                 true_covs)
+        est_mat, e_exists, est_cov_mat = self._ospa_setup_emat(state_dim)
 
-            if x_empty or y_empty:
-                self.ospa_localization[ii] = 0
-                self.ospa_cardinality[ii] = c
-                continue
+        # compute distance for all permutations
+        num_timesteps = true_mat.shape[1]
+        nt_objs = true_mat.shape[2]
+        ne_objs = est_mat.shape[2]
+        distances = np.nan * np.ones((ne_objs, nt_objs, num_timesteps))
+        comb = np.array(np.meshgrid(np.arange(ne_objs, dtype=int),
+                                    np.arange(nt_objs, dtype=int))).T.reshape(-1, 2)
+        e_inds = comb[:, 0]
+        t_inds = comb[:, 1]
+        shape = (ne_objs, nt_objs)
 
-            # create row matrices of data
-            x = np.stack([vec.flatten() for vec in x_lst])
-            y = np.stack([vec.flatten() for vec in y_lst])
+        if record_params:
+            self.ospa_localization = np.nan * np.ones(num_timesteps)
+            self.ospa_cardinality = np.nan * np.ones(num_timesteps)
 
-            n = x.shape[0]
-            m = y.shape[0]
-
-            x_mat = np.tile(x, (m, 1))
-            # set y_mat to repeat each value of y n times in a row
-            y_mat = np.tile(y, (1, x.shape[0])).reshape((n * m, y.shape[1]))
-
-            # get distances and set cutoff
+        for tt in range(num_timesteps):
+            # use proper core method
             if core_method is OSPAMethod.EUCLIDEAN:
-                dists = np.sqrt(np.sum((x_mat - y_mat)**2,
-                                       axis=1))
+                distances[:, :, tt] = np.sqrt(np.sum((true_mat[:, tt, t_inds]
+                                                      - est_mat[:, tt, e_inds])**2,
+                                                     axis=0)).reshape(shape)
+
+            elif core_method is OSPAMethod.MANHATTAN:
+                distances[:, :, tt] = np.sum(np.abs(true_mat[:, tt, t_inds]
+                                                    - est_mat[:, tt, e_inds]),
+                                             axis=0).reshape(shape)
 
             elif core_method is OSPAMethod.HELLINGER:
-                dists = np.nan * np.ones(m * n)
+                for row, col in zip(e_inds, t_inds):
+                    if not (e_exists[row, tt] and t_exists[col, tt]):
+                        continue
 
-                cov_lst = self._covs[ii]
-                cov_mat = np.tile(cov_lst, (m, 1, 1))
+                    _x = est_mat[:, tt, row]
+                    _cov_x = est_cov_mat[:, :, tt, row]
+                    _y = true_mat[:, tt, col]
+                    _cov_y = true_cov_mat[:, :, tt, col]
 
-                t_cov_lst = true_covs[ii]
-                t_cov_mat = np.nan * np.ones((n * m, x.shape[1], x.shape[1]))
-                for jj in range(m):
-                    start = jj * n
-                    end = start + n
-                    t_cov_mat[start:end, :, :] = t_cov_lst[jj]
-
-                for jj, (_x, _y, _cov_x, _cov_y) in enumerate(zip(x_mat, y_mat, cov_mat, t_cov_mat)):
-                    diff = (_x - _y).reshape((_cov_x.shape[0], 1))
                     _cov = _cov_x + _cov_y
+                    diff = (_x - _y).reshape((_cov.shape[0], 1))
                     epsilon = -0.25 * diff.T @ la.inv(_cov) @ diff
-                    dists[jj] = 1 - np.sqrt(np.sqrt(la.det(_cov_x @ _cov_y))
-                                            / la.det(0.5 * _cov)) * np.exp(epsilon)
+
+                    distances[row, col, tt] = 1 - np.sqrt(np.sqrt(la.det(_cov_x @ _cov_y))
+                                                          / la.det(0.5 * _cov)) \
+                        * np.exp(epsilon)
 
             elif core_method is OSPAMethod.MAHALANOBIS:
-                cov_lst = self._covs[ii]
-                cov_mat = np.tile(cov_lst, (m, 1, 1))
-                dists = np.nan * np.ones(m * n)
-                for jj, (_x, _y, _cov) in enumerate(zip(x_mat, y_mat, cov_mat)):
+                for row, col in zip(e_inds, t_inds):
+                    if not (e_exists[row, tt] and t_exists[col, tt]):
+                        continue
+                    _x = est_mat[:, tt, row]
+                    _cov = est_cov_mat[:, :, tt, row]
+                    _y = true_mat[:, tt, col]
                     diff = (_x - _y).reshape((_cov.shape[0], 1))
-                    dists[jj] = np.sqrt(diff.T @ _cov @ diff)
+                    distances[row, col, tt] = np.sqrt(diff.T @ _cov @ diff)
 
             else:
                 warn('OSPA method {} is not implemented. SKIPPING'.format(core_method))
                 core_method = None
                 break
 
-            dists = np.minimum(dists.reshape((m, n)), c)**p
+            # check for mismatch
+            one_exist = np.logical_xor(e_exists[:, [tt]], t_exists[:, [tt]].T)
+            empty = np.logical_and(np.logical_not(e_exists[:, [tt]]),
+                                   np.logical_not(t_exists[:, [tt]]).T)
 
-            # use hungarian to find minimum distances for getting total cost
-            row_ind, col_ind = linear_sum_assignment(dists)
-            cost = dists[row_ind, col_ind].sum()
+            distances[one_exist, tt] = c
+            if use_empty:
+                distances[empty, tt] = 0
+            else:
+                distances[empty, tt] = np.nan
 
-            inv_max_card = 1 / np.max([n, m])
-            card_diff = np.abs(n - m)
-            inv_p = 1 / p
-            c_p = c**p
-            self.ospa_localization[ii] = (inv_max_card * cost)**inv_p
-            self.ospa_cardinality[ii] = (inv_max_card * c_p * card_diff)**inv_p
+            distances[:, :, tt] = np.minimum(distances[:, :, tt], c)
 
-        self.ospa = self.ospa_localization + self.ospa_cardinality
-        self._ospa_params['core'] = core_method
-        self._ospa_params['cutoff'] = c
-        self._ospa_params['power'] = p
+            if record_params:
+                m = np.sum(e_exists[:, tt])
+                n = np.sum(t_exists[:, tt])
+                if n.astype(int) == 0 and m.astype == 0:
+                    self.ospa_localization[tt] = 0
+                    self.ospa_cardinality[tt] = 0
+                    continue
 
-    def plot_ospa_history(self, time_units='index', time=None, **kwargs):
+                if n.astype(int) == 0 or m.astype(int) == 0:
+                    self.ospa_localization[tt] = 0
+                    self.ospa_cardinality[tt] = c
+                    continue
+
+                cont_sub = distances[0:m.astype(int), 0:n.astype(int), tt]**p
+                row_ind, col_ind = linear_sum_assignment(cont_sub)
+                cost = cont_sub[row_ind, col_ind].sum()
+
+                inv_max_card = 1. / np.max([n, m])
+                card_diff = np.abs(n - m)
+                inv_p = 1. / p
+                c_p = c**p
+                self.ospa_localization[tt] = (inv_max_card * cost)**inv_p
+                self.ospa_cardinality[tt] = (inv_max_card * c_p * card_diff)**inv_p
+
+        if record_params:
+            self.ospa = self.ospa_localization + self.ospa_cardinality
+            self._ospa_params['core'] = core_method
+            self._ospa_params['cutoff'] = c
+            self._ospa_params['power'] = p
+
+        return distances, e_exists, t_exists
+
+    def _plt_ospa_hist(self, y_val, time_units, time, ttl, y_lbl, opts):
+        fig = opts['f_hndl']
+
+        if fig is None:
+            fig = plt.figure()
+            fig.add_subplot(1, 1, 1)
+
+        if time is None:
+            time = np.arange(y_val.size, dtype=int)
+
+        fig.axes[0].grid(True)
+        fig.axes[0].ticklabel_format(useOffset=False)
+        fig.axes[0].plot(time, y_val)
+
+        pltUtil.set_title_label(fig, 0, opts, ttl=ttl,
+                                x_lbl='Time ({})'.format(time_units),
+                                y_lbl=y_lbl)
+        fig.tight_layout()
+
+        return fig
+
+    def _plt_ospa_hist_subs(self, y_vals, time_units, time, ttl, y_lbls, opts):
+        fig = opts['f_hndl']
+        new_plot = fig is None
+        num_subs = len(y_vals)
+
+        if new_plot:
+            fig = plt.figure()
+
+        pltUtil.set_title_label(fig, 0, opts, ttl=ttl)
+        for ax, (y_val, y_lbl) in enumerate(zip(y_vals, y_lbls)):
+            if new_plot:
+                if ax > 0:
+                    kwargs = {'sharex': fig.axes[0]}
+                else:
+                    kwargs = {}
+                fig.add_subplot(num_subs, 1, ax + 1, **kwargs)
+                fig.axes[ax].grid(True)
+                fig.axes[ax].ticklabel_format(useOffset=False)
+                kwargs = {'y_lbl': y_lbl}
+                if ax == len(y_vals) - 1:
+                    kwargs['x_lbl'] = 'Time ({})'.format(time_units)
+
+                pltUtil.set_title_label(fig, ax, opts, **kwargs)
+
+            if time is None:
+                time = np.arange(y_val.size, dtype=int)
+
+            fig.axes[ax].plot(time, y_val)
+
+        if new_plot:
+            fig.tight_layout()
+
+        return fig
+
+    def plot_ospa_history(self, time_units='index', time=None, main_opts=None,
+                          sub_opts=None, plot_subs=True):
         """Plots the OSPA history.
 
         This requires that the OSPA has been calcualted by the approriate
@@ -425,43 +636,57 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         time : numpy array, optional
             Vector to use for the x-axis of the plot. If none is given then
             vector indices are used. The default is None.
-        **kwargs : dict
+        main_opts : dict, optional
             Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
             function. Values implemented here are `f_hndl`, and any values
-            relating to title/axis text formatting.
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the main plot.
+        sub_opts : dict, optional
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the sub plot.
+        plot_subs : bool, optional
+            Flag indicating if the component statistics (cardinality and
+            localization) should also be plotted.
 
         Returns
         -------
-        fig : matplotlib figure
-            Figure object the data was plotted on.
+        figs : dict
+            Dictionary of matplotlib figure objects the data was plotted on.
         """
         if self.ospa is None:
             warn('OSPA must be calculated before plotting')
             return
 
-        opts = pltUtil.init_plotting_opts(**kwargs)
-        fig = opts['f_hndl']
+        if main_opts is None:
+            main_opts = pltUtil.init_plotting_opts()
 
-        if fig is None:
-            fig = plt.figure()
-            fig.add_subplot(1, 1, 1)
-
-        if time is None:
-            time = np.arange(self.ospa.size, dtype=int)
-
-        fig.axes[0].grid(True)
-        fig.axes[0].plot(time, self.ospa)
+        if sub_opts is None and plot_subs:
+            sub_opts = pltUtil.init_plotting_opts()
 
         fmt = '{:s} OSPA (c = {:.1f}, p = {:d})'
         ttl = fmt.format(self._ospa_params['core'],
                          self._ospa_params['cutoff'],
                          self._ospa_params['power'])
-        pltUtil.set_title_label(fig, 0, opts, ttl=ttl,
-                                x_lbl='Time ({})'.format(time_units),
-                                y_lbl="OSPA")
-        fig.tight_layout()
+        y_lbl = 'OSPA'
 
-        return fig
+        figs = {}
+        figs['OSPA'] = self._plt_ospa_hist(self.ospa, time_units, time, ttl,
+                                           y_lbl, main_opts)
+
+        if plot_subs:
+            fmt = '{:s} OSPA Components (c = {:.1f}, p = {:d})'
+            ttl = fmt.format(self._ospa_params['core'],
+                             self._ospa_params['cutoff'],
+                             self._ospa_params['power'])
+            y_lbls = ['Localiztion', 'Cardinality']
+            figs['OSPA_subs'] = self._plt_ospa_hist_subs([self.ospa_localization,
+                                                          self.ospa_cardinality],
+                                                         time_units, time, ttl,
+                                                         y_lbls, main_opts)
+
+        return figs
 
 
 class ProbabilityHypothesisDensity(RandomFiniteSetBase):
@@ -553,7 +778,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 empty list
         """
         if not self.save_covs:
-            raise RuntimeWarning("Not saving covariances")
+            warn("Not saving covariances")
             return []
         if len(self._covs) > 0:
             return self._covs[-1]
@@ -1627,6 +1852,8 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
                                 linestyle='--', color='r')
 
+        f_hndl.axes[0].ticklabel_format(useOffset=False)
+
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
 
@@ -1802,6 +2029,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             be updated once per time step."""
         self._time_index_cntr = 0
 
+        self.ospa2 = None
+        self.ospa2_localization = None
+        self.ospa2_cardinality = None
+        self._ospa2_params = {}
+
         super().__init__(**kwargs)
 
     def save_filter_state(self):
@@ -1833,6 +2065,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         filt_state['_hypotheses'] = self._hypotheses
         filt_state['_card_dist'] = self._card_dist
         filt_state['_time_index_cntr'] = self._time_index_cntr
+
+        filt_state['ospa2'] = self.ospa2
+        filt_state['ospa2_localization'] = self.ospa2_localization
+        filt_state['ospa2_cardinality'] = self.ospa2_cardinality
+        filt_state['_ospa2_params'] = self._ospa_params
 
         return filt_state
 
@@ -1868,6 +2105,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._hypotheses = filt_state['_hypotheses']
         self._card_dist = filt_state['_card_dist']
         self._time_index_cntr = filt_state['_time_index_cntr']
+
+        self.ospa2 = filt_state['ospa2']
+        self.ospa2_localization = filt_state['ospa2_localization']
+        self.ospa2_cardinality = filt_state['ospa2_cardinality']
+        self._ospa2_params = filt_state['_ospa2_params']
 
     @property
     def states(self):
@@ -2648,6 +2890,96 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                 extract_kwargs = {}
             self.extract_states(**extract_kwargs)
 
+    def _ospa_setup_emat(self, state_dim):
+        # get sizes
+        num_timesteps = len(self.states)
+        num_objs = 0
+        lbl_to_ind = {}
+
+        for lst in self.labels:
+            for lbl in lst:
+                if lbl is None:
+                    continue
+                key = str(lbl)
+                if key not in lbl_to_ind:
+                    lbl_to_ind[key] = num_objs
+                    num_objs += 1
+
+        # create matrices
+        est_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
+        e_exists = False * np.ones((num_objs, num_timesteps))
+        est_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
+                                        num_objs))
+
+        for tt, (lbl_lst, s_lst) in enumerate(zip(self.labels, self.states)):
+            for lbl, s in zip(lbl_lst, s_lst):
+                if lbl is None:
+                    continue
+
+                obj_num = lbl_to_ind[str(lbl)]
+                e_exists[obj_num, tt] = True  # there is a label -> must exist
+                est_mat[:, tt, obj_num] = s.ravel()
+
+        if self.save_covs:
+            for tt, (lbl_lst, c_lst) in enumerate(zip(self.labels,
+                                                      self.covariances)):
+                for lbl, c in zip(lbl_lst, c_lst):
+                    if lbl is None:
+                        continue
+                    est_cov_mat[:, :, tt, lbl_to_ind[str(lbl)]] = c
+
+        return est_mat, e_exists, est_cov_mat
+
+    def calculate_ospa2(self, truth, c, p, win_len,
+                        core_method=OSPAMethod.MANHATTAN):
+        # Note p is redundant here so set = 1
+        (distances, e_exists, t_exists) = self.calculate_ospa(truth, c, 1,
+                                                              record_params=False,
+                                                              use_empty=False,
+                                                              core_method=core_method)
+
+        num_timesteps = distances.shape[2]
+        inv_p = 1. / p
+        c_p = c**p
+
+        self.ospa2_localization = np.nan * np.ones(num_timesteps)
+        self.ospa2_cardinality = np.nan * np.ones(num_timesteps)
+
+        for tt in range(num_timesteps):
+            win_idx = np.array([ii for ii in range(max(tt - win_len, 0), tt)],
+                               dtype=int)
+
+            # find matrix of time averaged OSPA between tracks
+            track_dist = np.nanmean(distances[:, :, win_idx], axis=2)
+            track_dist[np.isnan(track_dist)] = 0
+
+            valid_rows = np.any(e_exists[:, win_idx], axis=0)
+            valid_cols = np.any(t_exists[:, win_idx], axis=0)
+            m = np.sum(valid_rows)
+            n = np.sum(valid_cols)
+
+            if n.astype(int) <= 0 or m.astype(int) <= 0:
+                cost = 0
+            else:
+                track_dist = track_dist[valid_rows, valid_cols]**p
+                row_ind, col_ind = linear_sum_assignment(track_dist)
+                cost = track_dist[row_ind, col_ind].sum()
+
+            max_nm = np.max([n, m]).astype(int)
+            if max_nm <= 0:
+                self.ospa2_localization[tt] = 0
+                self.ospa2_cardinality[tt] = 0
+
+            else:
+                self.ospa2_localization[tt] = (cost / max_nm)**inv_p
+                self.ospa2_cardinality[tt] = (c_p * np.abs(m - n) / max_nm)**inv_p
+
+        self.ospa2 = self.ospa2_localization + self.ospa2_cardinality
+        self._ospa2_params['core'] = core_method
+        self._ospa2_params['cutoff'] = c
+        self._ospa2_params['power'] = p
+        self._ospa2_params['win_len'] = win_len
+
     def plot_states_labels(self, plt_inds, ttl="Labeled State Trajectories",
                            meas_tx_fnc=None, **kwargs):
         """Plots the best estimate for the states and labels.
@@ -2933,6 +3265,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         fig.axes[0].grid(True)
         fig.axes[0].step(time, card_history, where='post', label='estimated')
+        fig.axes[0].ticklabel_format(useOffset=False)
 
         pltUtil.set_title_label(fig, 0, opts, ttl=ttl,
                                 x_lbl='Time ({})'.format(time_units),
@@ -2940,6 +3273,75 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         fig.tight_layout()
 
         return fig
+
+    def plot_ospa2_history(self, time_units='index', time=None, main_opts=None,
+                           sub_opts=None, plot_subs=True):
+        """Plots the OSPA2 history.
+
+        This requires that the OSPA2 has been calcualted by the approriate
+        function first.
+
+        Parameters
+        ----------
+        time_units : string, optional
+            Text representing the units of time in the plot. The default is
+            'index'.
+        time : numpy array, optional
+            Vector to use for the x-axis of the plot. If none is given then
+            vector indices are used. The default is None.
+        main_opts : dict, optional
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the main plot.
+        sub_opts : dict, optional
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the sub plot.
+        plot_subs : bool, optional
+            Flag indicating if the component statistics (cardinality and
+            localization) should also be plotted.
+
+        Returns
+        -------
+        figs : dict
+            Dictionary of matplotlib figure objects the data was plotted on.
+        """
+        if self.ospa2 is None:
+            warn('OSPA must be calculated before plotting')
+            return
+
+        if main_opts is None:
+            main_opts = pltUtil.init_plotting_opts()
+
+        if sub_opts is None and plot_subs:
+            sub_opts = pltUtil.init_plotting_opts()
+
+        fmt = '{:s} OSPA2 (c = {:.1f}, p = {:d}, w={:d})'
+        ttl = fmt.format(self._ospa2_params['core'],
+                         self._ospa2_params['cutoff'],
+                         self._ospa2_params['power'],
+                         self._ospa2_params['win_len'])
+        y_lbl = 'OSPA2'
+
+        figs = {}
+        figs['OSPA2'] = self._plt_ospa_hist(self.ospa2, time_units, time, ttl,
+                                            y_lbl, main_opts)
+
+        if plot_subs:
+            fmt = '{:s} OSPA2 Components (c = {:.1f}, p = {:d}, w={:d})'
+            ttl = fmt.format(self._ospa2_params['core'],
+                             self._ospa2_params['cutoff'],
+                             self._ospa2_params['power'],
+                             self._ospa2_params['win_len'])
+            y_lbls = ['Localiztion', 'Cardinality']
+            figs['OSPA2_subs'] = self._plt_ospa_hist_subs([self.ospa2_localization,
+                                                           self.ospa2_cardinality],
+                                                          time_units, time, ttl,
+                                                          y_lbls, main_opts)
+
+        return figs
 
 
 class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
