@@ -2946,33 +2946,36 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self.ospa2_cardinality = np.nan * np.ones(num_timesteps)
 
         for tt in range(num_timesteps):
-            win_idx = np.array([ii for ii in range(max(tt - win_len, 0), tt)],
+            win_idx = np.array([ii for ii in range(max(tt - win_len + 1, 0),
+                                                   tt + 1)],
                                dtype=int)
 
             # find matrix of time averaged OSPA between tracks
             track_dist = np.nanmean(distances[:, :, win_idx], axis=2)
             track_dist[np.isnan(track_dist)] = 0
 
-            valid_rows = np.any(e_exists[:, win_idx], axis=0)
-            valid_cols = np.any(t_exists[:, win_idx], axis=0)
+            valid_rows = np.any(e_exists[:, win_idx], axis=1)
+            valid_cols = np.any(t_exists[:, win_idx], axis=1)
             m = np.sum(valid_rows)
             n = np.sum(valid_cols)
+
+            if n.astype(int) <= 0 and m.astype(int) <= 0:
+                self.ospa2_localization[tt] = 0
+                self.ospa2_cardinality[tt] = 0
+                continue
 
             if n.astype(int) <= 0 or m.astype(int) <= 0:
                 cost = 0
             else:
-                track_dist = track_dist[valid_rows, valid_cols]**p
+                track_dist = (track_dist[valid_rows,
+                                         valid_cols]**p).reshape((m.astype(int),
+                                                                  n.astype(int)))
                 row_ind, col_ind = linear_sum_assignment(track_dist)
                 cost = track_dist[row_ind, col_ind].sum()
 
-            max_nm = np.max([n, m]).astype(int)
-            if max_nm <= 0:
-                self.ospa2_localization[tt] = 0
-                self.ospa2_cardinality[tt] = 0
-
-            else:
-                self.ospa2_localization[tt] = (cost / max_nm)**inv_p
-                self.ospa2_cardinality[tt] = (c_p * np.abs(m - n) / max_nm)**inv_p
+            max_nm = np.max([n, m])
+            self.ospa2_localization[tt] = (cost / max_nm)**inv_p
+            self.ospa2_cardinality[tt] = (c_p * np.abs(m - n) / max_nm)**inv_p
 
         self.ospa2 = self.ospa2_localization + self.ospa2_cardinality
         self._ospa2_params['core'] = core_method
