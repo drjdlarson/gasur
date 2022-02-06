@@ -11,7 +11,7 @@ import gncpy.filters as gfilts
 import gncpy.dynamics as gdyn
 import gncpy.distributions as gdistrib
 import gasur.swarm_estimator.tracker as tracker
-from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
+import gasur.utilities.distributions as gasdist
 
 
 global_seed = 69
@@ -413,7 +413,7 @@ def _setup_ekf_gsm(dt, rng, m_dfs, m_vars):
 def _setup_phd_double_int_birth():
     mu = [np.array([10., 0., 0., 0.]).reshape((4, 1))]
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
-    gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
+    gm0 = gasdist.GaussianMixture(means=mu, covariances=cov, weights=[1])
 
     return [gm0, ]
 
@@ -421,7 +421,7 @@ def _setup_phd_double_int_birth():
 def _setup_gm_glmb_double_int_birth():
     mu = [np.array([10., 0., 0., 1.]).reshape((4, 1))]
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
-    gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
+    gm0 = gasdist.GaussianMixture(means=mu, covariances=cov, weights=[1])
 
     # return [(gm0, 0.03), ]
     return [(gm0, 0.003), ]
@@ -430,7 +430,7 @@ def _setup_gm_glmb_double_int_birth():
 def _setup_stm_glmb_double_int_birth():
     mu = [np.array([10., 0., 0., 1.]).reshape((4, 1))]
     scale = [np.diag(np.array([1, 1, 1, 1]))**2]
-    stm0 = StudentsTMixture(means=mu, scalings=scale, weights=[1])
+    stm0 = gasdist.StudentsTMixture(means=mu, scalings=scale, weights=[1])
 
     return [(stm0, 0.003), ]
 
@@ -488,7 +488,7 @@ def _setup_gsm_birth():
     # note: GSM filter assumes noise is conditionally Gaussian so use GM with 1 term for birth
     means = [np.array([2000, 2000, 20, 20, 0, 0]).reshape((6, 1))]
     cov = [np.diag((5 * 10**4, 5 * 10**4, 8, 8, 0.02, 0.02))]
-    gm0 = GaussianMixture(means=means, covariances=cov, weights=[1])
+    gm0 = gasdist.GaussianMixture(means=means, covariances=cov, weights=[1])
 
     return [(gm0, 0.05), ]
 
@@ -652,16 +652,16 @@ def test_PHD():  # noqa
     if debug_plots:
         phd.plot_ospa_history(time=time, time_units='s')
 
-    phd.calculate_ospa(global_true, 5, 1, core_method=tracker.OSPAMethod.MANHATTAN)
+    phd.calculate_ospa(global_true, 5, 1, core_method=gasdist.OSPAMethod.MANHATTAN)
     if debug_plots:
         phd.plot_ospa_history(time=time, time_units='s')
 
-    phd.calculate_ospa(global_true, 1, 1, core_method=tracker.OSPAMethod.HELLINGER,
+    phd.calculate_ospa(global_true, 1, 1, core_method=gasdist.OSPAMethod.HELLINGER,
                        true_covs=true_covs)
     if debug_plots:
         phd.plot_ospa_history(time=time, time_units='s')
 
-    phd.calculate_ospa(global_true, 5, 1, core_method=tracker.OSPAMethod.MAHALANOBIS)
+    phd.calculate_ospa(global_true, 5, 1, core_method=gasdist.OSPAMethod.MAHALANOBIS)
     if debug_plots:
         phd.plot_ospa_history(time=time, time_units='s')
 
@@ -776,11 +776,11 @@ def test_GLMB():  # noqa
     if debug_plots:
         glmb.plot_ospa2_history(time=time, time_units='s')
 
-    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=tracker.OSPAMethod.EUCLIDEAN)
+    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=gasdist.OSPAMethod.EUCLIDEAN)
     if debug_plots:
         glmb.plot_ospa2_history(time=time, time_units='s')
 
-    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=tracker.OSPAMethod.MAHALANOBIS)
+    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=gasdist.OSPAMethod.MAHALANOBIS)
     if debug_plots:
         glmb.plot_ospa2_history(time=time, time_units='s')
 

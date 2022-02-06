@@ -14,63 +14,14 @@ import matplotlib.animation as animation
 import abc
 from copy import deepcopy
 import warnings
-import enum
 
-from gasur.utilities.distributions import GaussianMixture
+import gasur.utilities.distributions as gasdist
 from gasur.utilities.graphs import k_shortest, murty_m_best
 from gasur.utilities.sampling import gibbs
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
 import gncpy.plotting as pltUtil
 import gncpy.filters as gfilts
 import gncpy.errors as gerr
-
-
-class OSPAMethod(enum.Enum):
-    """Enumeration for distance methods used in the OSPA calculation."""
-
-    MANHATTAN = enum.auto()
-    r"""Calculate the Manhattan/taxicab/:math:`\L_1` distance.
-
-    Notes
-    -----
-    Uses the form
-    .. math::
-        d^{(c)} = \Sigma_i \abs{x_i - y_i}
-    """
-
-    EUCLIDEAN = enum.auto()
-    r"""Calculate the euclidean distance between two points.
-
-    Notes
-    -----
-    Uses the form :math:`d^{(c)} = \sqrt{(x-y)^T(x-y)}`.
-    """
-
-    HELLINGER = enum.auto()
-    r"""Calculate the hellinger distance between two probability distributions.
-
-    Notes
-    -----
-    It is at most 1, and for Gaussian distributions it takes the form
-
-    .. math::
-        d_H(f,g) &= 1 - \sqrt{\frac{\sqrt{\det{\left[\Sigma_x \Sigma_y\right]}}}
-                              {\det{\left[0.5\Sigma\right]}}} \exp{\epsilon} \\
-        \epsilon &= \frac{1}{4}(x - y)^T\Sigma^{-1}(x - y) \\
-        \Sigma &= \Sigma_x + \Sigma_y
-    """
-
-    MAHALANOBIS = enum.auto()
-    r"""Calculate the Mahalanobis distance between a point and a distribution.
-
-    Notes
-    -----
-    Uses the form :math:`d^{(c)} = \sqrt{(x-y)^T\Sigma_y^{-1}(x-y)}`.
-    """
-
-    def __str__(self):
-        """Return the enum name for strings."""
-        return self.name
 
 
 class RandomFiniteSetBase(metaclass=abc.ABCMeta):
@@ -333,14 +284,12 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
         # create matrices
         true_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
-        t_exists = False * np.ones((num_objs, num_timesteps))
         true_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
                                          num_objs))
 
         for tt, lst in enumerate(truth):
             for obj_num, s in enumerate(lst):
-                t_exists[obj_num, tt] = s is not None
-                if t_exists[obj_num, tt]:
+                if s is not None:
                     true_mat[:, tt, obj_num] = s.ravel()
 
         if true_covs is not None:
@@ -349,7 +298,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
                     if c is not None:
                         true_cov_mat[:, :, tt, obj_num] = c
 
-        return true_mat, t_exists, true_cov_mat
+        return true_mat, true_cov_mat
 
     def _ospa_setup_emat(self, state_dim):
         # get sizes
@@ -362,14 +311,12 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
         # create matrices
         est_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
-        e_exists = False * np.ones((num_objs, num_timesteps))
         est_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
                                         num_objs))
 
         for tt, lst in enumerate(self._states):
             for obj_num, s in enumerate(lst):
-                e_exists[obj_num, tt] = s is not None
-                if e_exists[obj_num, tt]:
+                if s is not None:
                     est_mat[:, tt, obj_num] = s.ravel()
 
         if self.save_covs:
@@ -378,67 +325,25 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
                     if c is not None:
                         est_cov_mat[:, :, tt, obj_num] = c
 
-        return est_mat, e_exists, est_cov_mat
+        return est_mat, est_cov_mat
 
-    def calculate_ospa(self, truth, c, p, use_empty=True, core_method=None,
-                       true_covs=None, record_params=True):
-        """Calculates the OSPA distance between the truth at all timesteps.
-
-        Notes
-        -----
-        This calculates the Optimal SubPattern Assignment metric for the
-        extracted states and the supplied truth point distributions. The
-        calculation is based on
-        :cite:`Schuhmacher2008_AConsistentMetricforPerformanceEvaluationofMultiObjectFilters`
-        with much of the math defined in
-        :cite:`Schuhmacher2008_ANewMetricbetweenDistributionsofPointProcesses`.
-        A value is calculated for each timestep available in the data. This can
-        use different distance metrics as the core distance. The default follows
-        the main paper where the euclidean distance is used. Other options
-        include the Hellinger distance
-        (see :cite:`Nagappa2011_IncorporatingTrackUncertaintyintotheOSPAMetric`),
-        or the Mahalanobis distance.
-
-        Parameters
-        ----------
-        truth : list
-            Each element represents a timestep and is a list of N x 1 numpy array,
-            one per true agent in the swarm.
-        c : float
-            Distance cutoff for considering a point properly assigned. This
-            influences how cardinality errors are penalized. For :math:`p = 1`
-            it is the penalty given false point estimate.
-        p : int
-            The power of the distance term. Higher values penalize outliers
-            more.
-        core_method : :class:`OSPAMethod`, Optional
-            The main distance measure to use for the localization component.
-            The default value of None implies :attr:`.OSPAMethod.EUCLIDEAN`.
-        true_covs : list, Optional
-            Each element represents a timestep and is a list of N x N numpy arrays
-            corresonponding to the uncertainty about the true states. Note the
-            order must be consistent with the truth data given. This is only
-            needed for core methods :attr:`OSPAMethod.HELLINGER`. The defautl
-            value is None.
-        """
-        # error checking on optional input arguments
+    def _ospa_input_check(self, core_method, truth, true_covs):
         if core_method is None:
-            core_method = OSPAMethod.EUCLIDEAN
+            core_method = gasdist.OSPAMethod.EUCLIDEAN
 
-        elif core_method is OSPAMethod.MAHALANOBIS and not self.save_covs:
+        elif core_method is gasdist.OSPAMethod.MAHALANOBIS and not self.save_covs:
             msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
-            warnings.warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
-            core_method = OSPAMethod.EUCLIDEAN
+            warnings.warn(msg.format(core_method, gasdist.OSPAMethod.EUCLIDEAN))
+            core_method = gasdist.OSPAMethod.EUCLIDEAN
 
-        elif core_method is OSPAMethod.HELLINGER and true_covs is None:
+        elif core_method is gasdist.OSPAMethod.HELLINGER and true_covs is None:
             msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
-            warnings.warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
-            core_method = OSPAMethod.EUCLIDEAN
+            warnings.warn(msg.format(core_method, gasdist.OSPAMethod.EUCLIDEAN))
+            core_method = gasdist.OSPAMethod.EUCLIDEAN
 
-        if core_method is OSPAMethod.HELLINGER:
-            c = np.min([1, c]).item()
+        return core_method
 
-        # setup data structuers
+    def _ospa_find_s_dim(self, truth):
         state_dim = None
         for lst in truth:
             for _x in lst:
@@ -457,114 +362,66 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
                 if state_dim is not None:
                     break
 
-        true_mat, t_exists, true_cov_mat = self._ospa_setup_tmat(truth, state_dim,
-                                                                 true_covs)
-        est_mat, e_exists, est_cov_mat = self._ospa_setup_emat(state_dim)
+        return state_dim
 
-        # compute distance for all permutations
-        num_timesteps = true_mat.shape[1]
-        nt_objs = true_mat.shape[2]
-        ne_objs = est_mat.shape[2]
-        distances = np.nan * np.ones((ne_objs, nt_objs, num_timesteps))
-        comb = np.array(np.meshgrid(np.arange(ne_objs, dtype=int),
-                                    np.arange(nt_objs, dtype=int))).T.reshape(-1, 2)
-        e_inds = comb[:, 0]
-        t_inds = comb[:, 1]
-        shape = (ne_objs, nt_objs)
+    def calculate_ospa(self, truth, c, p, core_method=None,
+                       true_covs=None):
+        """Calculates the OSPA distance between the truth at all timesteps.
 
-        if record_params:
-            self.ospa_localization = np.nan * np.ones(num_timesteps)
-            self.ospa_cardinality = np.nan * np.ones(num_timesteps)
+        Wrapper for :func:`.utilities.distributions.calculate_ospa`.
 
-        for tt in range(num_timesteps):
-            # use proper core method
-            if core_method is OSPAMethod.EUCLIDEAN:
-                distances[:, :, tt] = np.sqrt(np.sum((true_mat[:, tt, t_inds]
-                                                      - est_mat[:, tt, e_inds])**2,
-                                                     axis=0)).reshape(shape)
+        Parameters
+        ----------
+        truth : list
+            Each element represents a timestep and is a list of N x 1 numpy array,
+            one per true agent in the swarm.
+        c : float
+            Distance cutoff for considering a point properly assigned. This
+            influences how cardinality errors are penalized. For :math:`p = 1`
+            it is the penalty given false point estimate.
+        p : int
+            The power of the distance term. Higher values penalize outliers
+            more.
+        core_method : :class:`.utilities.distributions.OSPAMethod`, Optional
+            The main distance measure to use for the localization component.
+            The default value of None implies :attr:`.OSPAMethod.EUCLIDEAN`.
+        true_covs : list, Optional
+            Each element represents a timestep and is a list of N x N numpy arrays
+            corresonponding to the uncertainty about the true states. Note the
+            order must be consistent with the truth data given. This is only
+            needed for core methods :attr:`OSPAMethod.HELLINGER`. The defautl
+            value is None.
+        """
+        # error checking on optional input arguments
+        core_method = self._ospa_input_check(core_method, truth, true_covs)
 
-            elif core_method is OSPAMethod.MANHATTAN:
-                distances[:, :, tt] = np.sum(np.abs(true_mat[:, tt, t_inds]
-                                                    - est_mat[:, tt, e_inds]),
-                                             axis=0).reshape(shape)
+        # setup data structures
+        state_dim = self._ospa_find_s_dim(truth)
+        if state_dim is None:
+            warnings.warn('Failed to get state dimension. SKIPPING OSPA calculation')
 
-            elif core_method is OSPAMethod.HELLINGER:
-                for row, col in zip(e_inds, t_inds):
-                    if not (e_exists[row, tt] and t_exists[col, tt]):
-                        continue
-
-                    _x = est_mat[:, tt, row]
-                    _cov_x = est_cov_mat[:, :, tt, row]
-                    _y = true_mat[:, tt, col]
-                    _cov_y = true_cov_mat[:, :, tt, col]
-
-                    _cov = _cov_x + _cov_y
-                    diff = (_x - _y).reshape((_cov.shape[0], 1))
-                    epsilon = -0.25 * diff.T @ la.inv(_cov) @ diff
-
-                    distances[row, col, tt] = 1 - np.sqrt(np.sqrt(la.det(_cov_x @ _cov_y))
-                                                          / la.det(0.5 * _cov)) \
-                        * np.exp(epsilon)
-
-            elif core_method is OSPAMethod.MAHALANOBIS:
-                for row, col in zip(e_inds, t_inds):
-                    if not (e_exists[row, tt] and t_exists[col, tt]):
-                        continue
-                    _x = est_mat[:, tt, row]
-                    _cov = est_cov_mat[:, :, tt, row]
-                    _y = true_mat[:, tt, col]
-                    diff = (_x - _y).reshape((_cov.shape[0], 1))
-                    distances[row, col, tt] = np.sqrt(diff.T @ _cov @ diff)
-
-            else:
-                warnings.warn('OSPA method {} is not implemented. SKIPPING'.format(core_method))
-                core_method = None
-                break
-
-            # check for mismatch
-            one_exist = np.logical_xor(e_exists[:, [tt]], t_exists[:, [tt]].T)
-            empty = np.logical_and(np.logical_not(e_exists[:, [tt]]),
-                                   np.logical_not(t_exists[:, [tt]]).T)
-
-            distances[one_exist, tt] = c
-            if use_empty:
-                distances[empty, tt] = 0
-            else:
-                distances[empty, tt] = np.nan
-
-            distances[:, :, tt] = np.minimum(distances[:, :, tt], c)
-
-            if record_params:
-                m = np.sum(e_exists[:, tt])
-                n = np.sum(t_exists[:, tt])
-                if n.astype(int) == 0 and m.astype(int) == 0:
-                    self.ospa_localization[tt] = 0
-                    self.ospa_cardinality[tt] = 0
-                    continue
-
-                if n.astype(int) == 0 or m.astype(int) == 0:
-                    self.ospa_localization[tt] = 0
-                    self.ospa_cardinality[tt] = c
-                    continue
-
-                cont_sub = distances[0:m.astype(int), 0:n.astype(int), tt]**p
-                row_ind, col_ind = linear_sum_assignment(cont_sub)
-                cost = cont_sub[row_ind, col_ind].sum()
-
-                inv_max_card = 1. / np.max([n, m])
-                card_diff = np.abs(n - m)
-                inv_p = 1. / p
-                c_p = c**p
-                self.ospa_localization[tt] = (inv_max_card * cost)**inv_p
-                self.ospa_cardinality[tt] = (inv_max_card * c_p * card_diff)**inv_p
-
-        if record_params:
-            self.ospa = self.ospa_localization + self.ospa_cardinality
+            nt = len(self._states)
+            self.ospa = np.zeros(nt)
+            self.ospa_localization = np.zeros(nt)
+            self.ospa_cardinality = np.zeros(nt)
             self._ospa_params['core'] = core_method
             self._ospa_params['cutoff'] = c
             self._ospa_params['power'] = p
+            return
 
-        return distances, e_exists, t_exists
+        true_mat, true_cov_mat = self._ospa_setup_tmat(truth, state_dim,
+                                                       true_covs)
+        est_mat, est_cov_mat = self._ospa_setup_emat(state_dim)
+
+        # find OSPA
+        (self.ospa, self.ospa_localization, self.ospa_cardinality,
+         self._ospa_params['core'], self._ospa_params['cutoff'],
+         self._ospa_params['power']) = gasdist.calculate_ospa(est_mat,
+                                                              true_mat, c, p,
+                                                              use_empty=True,
+                                                              core_method=core_method,
+                                                              true_cov_mat=true_cov_mat,
+                                                              est_cov_mat=est_cov_mat)[0:6]
 
     def _plt_ospa_hist(self, y_val, time_units, time, ttl, y_lbl, opts):
         fig = opts['f_hndl']
@@ -727,7 +584,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self.merge_threshold = merge_threshold
         self.max_gauss = max_gauss
 
-        self._gaussMix = GaussianMixture()
+        self._gaussMix = gasdist.GaussianMixture()
 
         super().__init__(**kwargs)
 
@@ -845,7 +702,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         """
         gm_tup = zip(probDensity.means,
                      probDensity.covariances)
-        gm = GaussianMixture()
+        gm = gasdist.GaussianMixture()
         gm.weights = [self.prob_survive * x for x in probDensity.weights.copy()]
         for ii, (m, P) in enumerate(gm_tup):
             self.filter.cov = P
@@ -929,7 +786,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             corrected probability density.
 
         """
-        gm = GaussianMixture()
+        gm = gasdist.GaussianMixture()
         det_weights = [self.prob_detection * x for x in probDensity.weights]
         for z in meas:
             w_lst = []
@@ -2907,7 +2764,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         # create matrices
         est_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
-        e_exists = False * np.ones((num_objs, num_timesteps))
         est_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
                                         num_objs))
 
@@ -2917,7 +2773,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     continue
 
                 obj_num = lbl_to_ind[str(lbl)]
-                e_exists[obj_num, tt] = True  # there is a label -> must exist
                 est_mat[:, tt, obj_num] = s.ravel()
 
         if self.save_covs:
@@ -2928,64 +2783,42 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         continue
                     est_cov_mat[:, :, tt, lbl_to_ind[str(lbl)]] = c
 
-        return est_mat, e_exists, est_cov_mat
+        return est_mat, est_cov_mat
 
-    def calculate_ospa2(self, truth, c, p, win_len,
-                        core_method=OSPAMethod.MANHATTAN):
-        # Note p is redundant here so set = 1
-        (distances, e_exists, t_exists) = self.calculate_ospa(truth, c, 1,
-                                                              record_params=False,
-                                                              use_empty=False,
-                                                              core_method=core_method)
+    def calculate_ospa2(self, truth, c, p, win_len, true_covs=None,
+                        core_method=gasdist.OSPAMethod.MANHATTAN):
+        # error checking on optional input arguments
+        core_method = self._ospa_input_check(core_method, truth, true_covs)
 
-        num_timesteps = distances.shape[2]
-        inv_p = 1. / p
-        c_p = c**p
+        # setup data structures
+        state_dim = self._ospa_find_s_dim(truth)
+        if state_dim is None:
+            warnings.warn('Failed to get state dimension. SKIPPING OSPA(2) calculation')
 
-        self.ospa2_localization = np.nan * np.ones(num_timesteps)
-        self.ospa2_cardinality = np.nan * np.ones(num_timesteps)
+            nt = len(self._states)
+            self.ospa2 = np.zeros(nt)
+            self.ospa2_localization = np.zeros(nt)
+            self.ospa2_cardinality = np.zeros(nt)
+            self._ospa2_params['core'] = core_method
+            self._ospa2_params['cutoff'] = c
+            self._ospa2_params['power'] = p
+            self._ospa2_params['win_len'] = win_len
+            return
 
-        for tt in range(num_timesteps):
-            win_idx = np.array([ii for ii in range(max(tt - win_len + 1, 0),
-                                                   tt + 1)],
-                               dtype=int)
+        true_mat, true_cov_mat = self._ospa_setup_tmat(truth, state_dim,
+                                                       true_covs)
+        est_mat, est_cov_mat = self._ospa_setup_emat(state_dim)
 
-            # find matrix of time averaged OSPA between tracks
-            with warnings.catch_warnings():
-                warnings.filterwarnings(action='ignore',
-                                        message='Mean of empty slice')
-                track_dist = np.nanmean(distances[:, :, win_idx], axis=2)
-
-            track_dist[np.isnan(track_dist)] = 0
-
-            valid_rows = np.any(e_exists[:, win_idx], axis=1)
-            valid_cols = np.any(t_exists[:, win_idx], axis=1)
-            m = np.sum(valid_rows)
-            n = np.sum(valid_cols)
-
-            if n.astype(int) <= 0 and m.astype(int) <= 0:
-                self.ospa2_localization[tt] = 0
-                self.ospa2_cardinality[tt] = 0
-                continue
-
-            if n.astype(int) <= 0 or m.astype(int) <= 0:
-                cost = 0
-            else:
-                track_dist = (track_dist[valid_rows,
-                                         valid_cols]**p).reshape((m.astype(int),
-                                                                  n.astype(int)))
-                row_ind, col_ind = linear_sum_assignment(track_dist)
-                cost = track_dist[row_ind, col_ind].sum()
-
-            max_nm = np.max([n, m])
-            self.ospa2_localization[tt] = (cost / max_nm)**inv_p
-            self.ospa2_cardinality[tt] = (c_p * np.abs(m - n) / max_nm)**inv_p
-
-        self.ospa2 = self.ospa2_localization + self.ospa2_cardinality
-        self._ospa2_params['core'] = core_method
-        self._ospa2_params['cutoff'] = c
-        self._ospa2_params['power'] = p
-        self._ospa2_params['win_len'] = win_len
+        # find OSPA
+        (self.ospa2, self.ospa2_localization, self.ospa2_cardinality,
+         self._ospa2_params['core'], self._ospa2_params['cutoff'],
+         self._ospa2_params['power'],
+         self._ospa2_params['win_len']) = gasdist.calculate_ospa2(est_mat,
+                                                                  true_mat, c,
+                                                                  p, win_len,
+                                                                  core_method=core_method,
+                                                                  true_cov_mat=true_cov_mat,
+                                                                  est_cov_mat=est_cov_mat)
 
     def plot_states_labels(self, plt_inds, ttl="Labeled State Trajectories",
                            meas_tx_fnc=None, **kwargs):
