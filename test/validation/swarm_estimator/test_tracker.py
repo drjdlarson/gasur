@@ -726,7 +726,7 @@ def test_GLMB():  # noqa
     rng = rnd.default_rng(global_seed)
 
     dt = 0.01
-    t0, t1 = 0, 6 + dt
+    t0, t1 = 0, 4.5 + dt  # 6 + dt
 
     filt = _setup_double_int_kf(dt)
     state_mat_args = (dt, 'test arg')
@@ -740,6 +740,7 @@ def test_GLMB():  # noqa
     GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args, **RFS_base_args)
+    glmb.save_covs = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -772,6 +773,14 @@ def test_GLMB():  # noqa
         glmb.plot_ospa_history(time=time, time_units='s')
 
     glmb.calculate_ospa2(global_true, 5, 1, 10)
+    if debug_plots:
+        glmb.plot_ospa2_history(time=time, time_units='s')
+
+    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=tracker.OSPAMethod.EUCLIDEAN)
+    if debug_plots:
+        glmb.plot_ospa2_history(time=time, time_units='s')
+
+    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=tracker.OSPAMethod.MAHALANOBIS)
     if debug_plots:
         glmb.plot_ospa2_history(time=time, time_units='s')
 

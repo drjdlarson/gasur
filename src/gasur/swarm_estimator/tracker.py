@@ -13,7 +13,7 @@ from matplotlib.patches import Ellipse
 import matplotlib.animation as animation
 import abc
 from copy import deepcopy
-from warnings import warn
+import warnings
 import enum
 
 from gasur.utilities.distributions import GaussianMixture
@@ -147,7 +147,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
     @ospa_method.setter
     def ospa_method(self, val):
-        warn('OSPA method is read only. SKIPPING')
+        warnings.warn('OSPA method is read only. SKIPPING')
 
     @abc.abstractmethod
     def save_filter_state(self):
@@ -427,12 +427,12 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
 
         elif core_method is OSPAMethod.MAHALANOBIS and not self.save_covs:
             msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
-            warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
+            warnings.warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
             core_method = OSPAMethod.EUCLIDEAN
 
         elif core_method is OSPAMethod.HELLINGER and true_covs is None:
             msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
-            warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
+            warnings.warn(msg.format(core_method, OSPAMethod.EUCLIDEAN))
             core_method = OSPAMethod.EUCLIDEAN
 
         if core_method is OSPAMethod.HELLINGER:
@@ -517,7 +517,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
                     distances[row, col, tt] = np.sqrt(diff.T @ _cov @ diff)
 
             else:
-                warn('OSPA method {} is not implemented. SKIPPING'.format(core_method))
+                warnings.warn('OSPA method {} is not implemented. SKIPPING'.format(core_method))
                 core_method = None
                 break
 
@@ -537,7 +537,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             if record_params:
                 m = np.sum(e_exists[:, tt])
                 n = np.sum(t_exists[:, tt])
-                if n.astype(int) == 0 and m.astype == 0:
+                if n.astype(int) == 0 and m.astype(int) == 0:
                     self.ospa_localization[tt] = 0
                     self.ospa_cardinality[tt] = 0
                     continue
@@ -656,7 +656,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             Dictionary of matplotlib figure objects the data was plotted on.
         """
         if self.ospa is None:
-            warn('OSPA must be calculated before plotting')
+            warnings.warn('OSPA must be calculated before plotting')
             return
 
         if main_opts is None:
@@ -778,7 +778,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 empty list
         """
         if not self.save_covs:
-            warn("Not saving covariances")
+            warnings.warn("Not saving covariances")
             return []
         if len(self._covs) > 0:
             return self._covs[-1]
@@ -1718,7 +1718,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             n_agents = round(self._gaussMix.weights[idx])
             if n_agents <= 0:
                 msg = "Gaussian weights are 0 before reaching cardinality"
-                warn(msg, RuntimeWarning)
+                warnings.warn(msg, RuntimeWarning)
                 break
 
             tot_agents += n_agents
@@ -1836,7 +1836,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 t_len = len(x_vals)
                 msg = "True Cardinality vector length ({})".format(c_len) \
                     + " does not match time vector length ({})".format(t_len)
-                warn(msg)
+                warnings.warn(msg)
             else:
                 f_hndl.axes[0].plot(x_vals, true_card, color='g',
                                     label='True Cardinality',
@@ -1896,7 +1896,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         if not self.debug_plots:
             msg = 'Debug plots turned off'
-            warn(msg)
+            warnings.warn(msg)
             return f_hndl
 
         if f_hndl is None:
@@ -2593,7 +2593,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         """
         # gate measurements by tracks
         if self.gating_on:
-            warn('Gating not implemented yet. SKIPPING', RuntimeWarning)
+            warnings.warn('Gating not implemented yet. SKIPPING', RuntimeWarning)
             # means = []
             # covs = []
             # for ent in self._track_tab:
@@ -2727,7 +2727,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         self._covs[tt].append(c)
 
         if not update and not calc_states:
-            warn('Extracting states performed no actions')
+            warnings.warn('Extracting states performed no actions')
 
         return idx_cmp
 
@@ -2951,7 +2951,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                                dtype=int)
 
             # find matrix of time averaged OSPA between tracks
-            track_dist = np.nanmean(distances[:, :, win_idx], axis=2)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(action='ignore',
+                                        message='Mean of empty slice')
+                track_dist = np.nanmean(distances[:, :, win_idx], axis=2)
+
             track_dist[np.isnan(track_dist)] = 0
 
             valid_rows = np.any(e_exists[:, win_idx], axis=1)
@@ -3312,7 +3316,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             Dictionary of matplotlib figure objects the data was plotted on.
         """
         if self.ospa2 is None:
-            warn('OSPA must be calculated before plotting')
+            warnings.warn('OSPA must be calculated before plotting')
             return
 
         if main_opts is None:
@@ -3575,7 +3579,7 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         RuntimeWarning
             Function must be implemented.
         """
-        warn('Not implemented for this class')
+        warnings.warn('Not implemented for this class')
 
 class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
