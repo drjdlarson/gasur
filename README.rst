@@ -115,7 +115,7 @@ Many of them do not ensure algorithm performance but may do some basic checking 
 The validation test environment runs all tests within the **test/validation/** sub-directory. These are designed to verify algorithm performance and include more extensive checking of the output arguments against known values. They often run slower than unit tests.
 These can be run with
 
-.. code-block::
+.. code-block:: bash
 
     tox -e validation_test
 
