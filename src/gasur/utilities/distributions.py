@@ -539,9 +539,10 @@ def calculate_ospa2(est_mat, true_mat, c, p, win_len,
         if n.astype(int) <= 0 or m.astype(int) <= 0:
             cost = 0
         else:
-            track_dist = (track_dist[valid_rows,
-                                     valid_cols]**p).reshape((m.astype(int),
-                                                              n.astype(int)))
+            inds = np.logical_and(valid_rows.reshape((valid_rows.size, 1)),
+                                  valid_cols.reshape((1, valid_cols.size)))
+            track_dist = (track_dist[inds]**p).reshape((m.astype(int),
+                                                        n.astype(int)))
             row_ind, col_ind = linear_sum_assignment(track_dist)
             cost = track_dist[row_ind, col_ind].sum()
 
