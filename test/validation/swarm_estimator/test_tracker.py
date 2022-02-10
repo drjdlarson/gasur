@@ -742,6 +742,11 @@ def test_GLMB():  # noqa
     glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args, **RFS_base_args)
     glmb.save_covs = True
 
+    # test save/load filter
+    filt_state = glmb.save_filter_state()
+    glmb = tracker.GeneralizedLabeledMultiBernoulli()
+    glmb.load_filter_state(filt_state)
+
     time = np.arange(t0, t1, dt)
     true_agents = []
     global_true = []
@@ -1397,6 +1402,11 @@ def test_QKF_GSM_GLMB():  # noqa
     glmb = tracker.GSMGeneralizedLabeledMultiBernoulli(**GLMB_args,
                                                        **RFS_base_args)
 
+    # test save/load filter
+    filt_state = glmb.save_filter_state()
+    glmb = tracker.GSMGeneralizedLabeledMultiBernoulli()
+    glmb.load_filter_state(filt_state)
+
     time = np.arange(t0, t1, dt)
     true_agents = []
     global_true = []
@@ -1654,7 +1664,7 @@ if __name__ == "__main__":
     # test_PHD()
     # test_CPHD()
 
-    test_GLMB()
+    # test_GLMB()
     # test_STM_GLMB()
     # test_SMC_GLMB()
     # test_USMC_GLMB()
@@ -1666,7 +1676,7 @@ if __name__ == "__main__":
     # test_SQKF_GLMB()
     # test_UKF_GLMB()
 
-    # test_QKF_GSM_GLMB()
+    test_QKF_GSM_GLMB()
     # test_SQKF_GSM_GLMB()
     # test_UKF_GSM_GLMB()
     # test_EKF_GSM_GLMB()

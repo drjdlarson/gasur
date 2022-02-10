@@ -1903,6 +1903,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         filt_state['req_births'] = self.req_births
         filt_state['req_surv'] = self.req_surv
+        filt_state['req_upd'] = self.req_upd
         filt_state['gating_on'] = self.gating_on
         filt_state['prune_threshold'] = self.prune_threshold
         filt_state['max_hyps'] = self.max_hyps
@@ -1942,6 +1943,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self.req_births = filt_state['req_births']
         self.req_surv = filt_state['req_surv']
+        self.req_upd = filt_state['req_upd']
         self.gating_on = filt_state['gating_on']
         self.prune_threshold = filt_state['prune_threshold']
         self.max_hyps = filt_state['max_hyps']
