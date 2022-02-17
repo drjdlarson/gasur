@@ -423,7 +423,6 @@ def _setup_gm_glmb_double_int_birth():
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
     gm0 = gasdist.GaussianMixture(means=mu, covariances=cov, weights=[1])
 
-    # return [(gm0, 0.03), ]
     return [(gm0, 0.003), ]
 
 
@@ -1133,7 +1132,6 @@ def test_JGLMB():  # noqa
     rng = rnd.default_rng(global_seed)
 
     dt = 0.01
-    # t0, t1 = 0, 6 + dt
     t0, t1 = 0, 6 + dt
 
     filt = _setup_double_int_kf(dt)
@@ -1141,6 +1139,69 @@ def test_JGLMB():  # noqa
     meas_fun_args = ('useless arg', )
 
     b_model = _setup_gm_glmb_double_int_birth()
+
+    RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.98,
+                     'in_filter': filt, 'birth_terms': b_model,
+                     'clutter_den': 1**-3, 'clutter_rate': 1**-3}
+    JGLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
+                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
+    jglmb = tracker.JointGeneralizedLabeledMultiBernoulli(**JGLMB_args,
+                                                          **RFS_base_args)
+
+    time = np.arange(t0, t1, dt)
+    true_agents = []
+    global_true = []
+    print('\tStarting sim')
+    for kk, tt in enumerate(time):
+        if np.mod(kk, 100) == 0:
+            print('\t\t{:.2f}'.format(tt))
+            sys.stdout.flush()
+
+        true_agents = _update_true_agents_prob(true_agents, tt, dt, b_model, rng)
+        global_true.append(deepcopy(true_agents))
+
+        pred_args = {'state_mat_args': state_mat_args}
+        jglmb.predict(tt, filt_args=pred_args)
+
+        meas_in = _gen_meas(tt, true_agents, filt.proc_noise, filt.meas_noise, rng)
+
+        cor_args = {'meas_fun_args': meas_fun_args}
+        jglmb.correct(tt, meas_in, filt_args=cor_args)
+
+        extract_kwargs = {'update': True, 'calc_states': False}
+        jglmb.cleanup(extract_kwargs=extract_kwargs)
+
+    extract_kwargs = {'update': False, 'calc_states': True}
+    jglmb.extract_states(**extract_kwargs)
+
+    jglmb.calculate_ospa(global_true, 2, 1)
+
+    if debug_plots:
+        jglmb.plot_states_labels([0, 1], true_states=global_true,
+                                 meas_inds=[0, 1])
+        jglmb.plot_card_dist()
+        jglmb.plot_card_history(time_units='s', time=time)
+        jglmb.plot_ospa_history()
+
+    print('\tExpecting {} agents'.format(len(true_agents)))
+
+    assert len(true_agents) == jglmb.cardinality, 'Wrong cardinality'
+
+
+def test_JGLMB_high_birth():  # noqa
+    print('Test GM-JGLMB high birth')
+
+    rng = rnd.default_rng(global_seed)
+
+    dt = 0.01
+    t0, t1 = 0, 6 + dt
+
+    filt = _setup_double_int_kf(dt)
+    state_mat_args = (dt, 'test arg')
+    meas_fun_args = ('useless arg', )
+
+    b_model = _setup_gm_glmb_double_int_birth()
+    b_model[0] = (b_model[0][0], 0.007)  # increase birth prob for this test
 
     RFS_base_args = {'prob_detection': 0.99, 'prob_survive': 0.98,
                      'in_filter': filt, 'birth_terms': b_model,
@@ -2413,10 +2474,18 @@ if __name__ == "__main__":
     # test_SMC_GLMB()
     # test_USMC_GLMB()
     # test_MCMC_USMC_GLMB()
+    # test_QKF_GLMB()
+    # test_SQKF_GLMB()
+    # test_UKF_GLMB()
+    # test_QKF_GSM_GLMB()
+    # test_SQKF_GSM_GLMB()
+    # test_UKF_GSM_GLMB()
+    # test_EKF_GSM_GLMB()
 
     # test_JGLMB()
+    # test_JGLMB_high_birth()
     # test_STM_JGLMB()
-    # test_SMC_JGLMB()
+    test_SMC_JGLMB()
     # test_USMC_JGLMB()
     # test_MCMC_USMC_JGLMB()
     # test_QKF_JGLMB()
@@ -2424,16 +2493,7 @@ if __name__ == "__main__":
     # test_UKF_JGLMB()
     # test_QKF_GSM_JGLMB()
     # test_SQKF_GSM_JGLMB()
-    test_UKF_GSM_JGLMB()
-
-    # test_QKF_GLMB()
-    # test_SQKF_GLMB()
-    # test_UKF_GLMB()
-
-    test_QKF_GSM_GLMB()
-    # test_SQKF_GSM_GLMB()
-    # test_UKF_GSM_GLMB()
-    # test_EKF_GSM_GLMB()
+    # test_UKF_GSM_JGLMB()
 
     end = timer()
     print('{:.2f} s'.format(end - start))
