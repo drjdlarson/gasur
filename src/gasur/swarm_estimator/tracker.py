@@ -6,8 +6,6 @@ for RFS tracking related algorithms.
 import numpy as np
 import numpy.linalg as la
 import numpy.random as rnd
-import numpy.matlib as matlib
-from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 from matplotlib.patches import Ellipse
 import matplotlib.animation as animation
@@ -737,7 +735,8 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             keyword arguments to pass to the inner filters correct function.
             The default is {}.
 
-        .. todo::
+        Todo
+        ----
             Fix the measurement gating
 
         Returns
@@ -3186,9 +3185,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         return figs
 
 
-class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """Implementation of a STM-GLMB filter."""
-
+class _STMGLMBBase:
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -3238,23 +3235,16 @@ class STMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return [meas[ii] for ii in valid]
 
 
-class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """Implementation of a Sequential Monte Carlo GLMB filter.
+# Note: need inherited classes in this order for proper MRO
+class STMGeneralizedLabeledMultiBernoulli(_STMGLMBBase,
+                                          GeneralizedLabeledMultiBernoulli):
+    """Implementation of a STM-GLMB filter."""
 
-    This is based on :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
-    It does not account for agents spawned from existing tracks, only agents
-    birthed from the given birth model.
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
 
-    Attributes
-    ----------
-    compute_prob_detection : callable
-        Function that takes a list of particles as the first argument and `*args`
-        as the next. Returns the probability of detection for each particle as a list.
-    compute_prob_survive : callable
-        Function that takes a list of particles as the first argument and `*args` as
-        the next. Returns the average probability of survival for each particle as a list.
-    """
 
+class _SMCGLMBBase:
     def __init__(self, compute_prob_detection=None, compute_prob_survive=None,
                  **kwargs):
         self.compute_prob_detection = compute_prob_detection
@@ -3416,39 +3406,107 @@ class SMCGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         """
         warnings.warn('Not implemented for this class')
 
-class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+
+# Note: need inherited classes in this order for proper MRO
+class SMCGeneralizedLabeledMultiBernoulli(_SMCGLMBBase,
+                                          GeneralizedLabeledMultiBernoulli):
+    """Implementation of a Sequential Monte Carlo GLMB filter.
+
+    This is based on :cite:`Vo2014_LabeledRandomFiniteSetsandtheBayesMultiTargetTrackingFilter`
+    It does not account for agents spawned from existing tracks, only agents
+    birthed from the given birth model.
+
+    Attributes
+    ----------
+    compute_prob_detection : callable
+        Function that takes a list of particles as the first argument and `*args`
+        as the next. Returns the probability of detection for each particle as a list.
+    compute_prob_survive : callable
+        Function that takes a list of particles as the first argument and `*args` as
+        the next. Returns the average probability of survival for each particle as a list.
+    """
 
     def __init__(self, **kwargs):
-        self._old_track_tab = [] # used to store previous track table and initialize survival probability matrix
-
-        """ linear index corresponding to timestep, manually updated. Used
-            to index things since timestep in label can have decimals. Must
-            be updated once per time step."""
-
         super().__init__(**kwargs)
 
+
+class GSMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    """Implementation of a GSM-GLMB filter.
+
+    The implementation of the GSM-GLMB fitler does not change for different core
+    filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use any
+    of the GSM inner filters from gncpy.filters
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
+    """Implements a Joint Generalized Labeled Multi-Bernoullie Filter.
+
+    Notes
+    -----
+    This is based on :cite:`Vo2017_AnEfficientImplementationoftheGeneralizedLabeledMultiBernoulliFilter`.
+    It does not account for agents spawned from existing tracks, only agents
+    birthed from the given birth model.
+    """
+
+    def __init__(self, **kwargs):
+        self._old_track_tab = []  # used to store previous track table and initialize survival probability matrix
+        super().__init__(**kwargs)
+
+    def save_filter_state(self):
+        """Saves filter variables so they can be restored later.
+
+        Note that to pickle the resulting dictionary the :code:`dill` package
+        may need to be used due to potential pickling of functions.
+        """
+        filt_state = super().save_filter_state()
+
+        filt_state['_old_track_tab'] = deepcopy(self._old_track_tab)
+
+        return filt_state
+
+    def load_filter_state(self, filt_state):
+        """Initializes filter using saved filter state.
+
+        Attributes
+        ----------
+        filt_state : dict
+            Dictionary generated by :meth:`save_filter_state`.
+        """
+        super().load_filter_state(filt_state)
+
+        self._old_track_tab = filt_state['_old_track_tab']
+
     def predict(self, timestep, filt_args={}):
-        """ Prediction step of the JGLMB filter.
+        """Prediction step of the JGLMB filter.
 
-            This predicts new hypothesis, and propogates them to the next time
-            step. It also updates the cardinality distribution. Because this calls
-            the inner filter's predict function, the keyword arguments must contain
-            any information needed by that function.
+        This predicts new hypothesis, and propogates them to the next time
+        step. Because this calls
+        the inner filter's predict function, the keyword arguments must contain
+        any information needed by that function.
 
-            Keyword Args:
-                time_step (int): Current time step number for the new labels
-            """
+        Parameters
+        ----------
+        timestep: float
+            Current timestep.
+        filt_args : dict, optional
+            Passed to the inner filter. The default is {}.
 
+        Returns
+        -------
+        None.
+        """
         # Birth Track Table
-        # self._pred_timesteps.append(timestep)
-
         birth_tab = self._gen_birth_tab(timestep)[0]
 
         # Survival Track Table
         surv_tab = self._gen_surv_tab(timestep, filt_args)
 
         # Prediction Track Table
-        #need to make this self._predict_tab, overwrriting self._track_tab is preventing the surv tab from working properly (i think)
+        # TODO: need to make this self._predict_tab, overwrriting self._track_tab is preventing the surv tab from working properly (i think)
         # self._predict_tab = birth_tab + surv_tab
         self._track_tab = birth_tab + surv_tab
 
@@ -3482,22 +3540,33 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         return up_tab, all_cost_m
 
     def correct(self, timestep, meas, filt_args={}):
-        """ Correction step of the JGLMB filter.
+        """Correction step of the JGLMB filter.
 
-            This corrects the hypotheses based on the measurements and gates the
-            measurements according to the class settings. It also updates the
-            cardinality distribution. Because this calls the inner filter's correct
-            function, the keyword arguments must contain any information needed by
-            that function.
+        This corrects the hypotheses based on the measurements and gates the
+        measurements according to the class settings. It also updates the
+        cardinality distribution. Because this calls the inner filter's correct
+        function, the keyword arguments must contain any information needed by
+        that function.
 
-            Keyword Args:
-            meas (list): List of Nm x 1 numpy arrays that contain all the
-                    measurements needed for this correction
-            """
+        Parameters
+        ----------
+        timestep: float
+            Current timestep.
+        meas_in : list
+            List of Nm x 1 numpy arrays each representing a measuremnt.
+        filt_args : dict, optional
+            keyword arguments to pass to the inner filters correct function.
+            The default is {}.
 
-        # self._cor_timesteps.append(timestep)
+        Todo
+        ----
+            Fix the measurement gating
+
+        Returns
+        -------
+        None
+        """
         # gating by tracks
-
         if self.gating_on:
             RuntimeError('Gating not implemented yet. PLEASE TURN OFF GATING')
             # for ent in self._track_tab:
@@ -3508,8 +3577,6 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
                 ent.gatemeas = np.arange(0, len(meas))
 
         # Pre-calculation of average survival/death probabilities
-        # avg_surv = np.zeros(len(self._track_tab))
-        # avg_surv = np.concatenate([self.birth_terms[:][1], len(self._old_track_tab)], axis=0)
         avg_surv = np.zeros(len(self.birth_terms) + len(self._old_track_tab))
         for ii in range(0, len(avg_surv)):
             if ii <= len(self.birth_terms) - 1:
@@ -3524,42 +3591,21 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         avg_detect = np.array([avg_detect]).T
         avg_miss = 1 - avg_detect
 
-        # num_meas = np.shape(meas)[1]
         self._meas_tab.append(deepcopy(meas))
         num_meas = len(meas)
 
         # missed detection tracks
-        num_pred = len(self._track_tab)
-        #take a look at this, might be the source of the issue.
-        # current thought: look at how matlab track table updates,
-        # compare to ryan's glmb and vo jglmb/glmb, figure out how the up_tab
-        # initialization/propagation should occur, likely something is going
-        # wrong here because the filter is getting the best possible estimate,
-        # but there's a lack of time_index which communicates some issues.
-        # Could also be a problem with the meas_assoc_hist thing, but probably not.
-
         [up_tab, all_cost_m] = self._gen_cor_tab(num_meas, meas, timestep, filt_args)
 
         clutter = self.clutter_rate * self.clutter_den
+
         # Joint Cost Matrix
         joint_cost = np.concatenate([np.diag(avg_death.flatten()),
                                      np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
 
-        other_jc_terms = np.matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
+        other_jc_terms = np.tile(avg_surv * avg_detect, (1, num_meas)) * all_cost_m / (clutter)
 
         joint_cost = np.append(joint_cost, other_jc_terms, axis=1)
-
-        # if num_meas == 0:
-        #     joint_cost = np.concatenate([np.diag(avg_death.flatten()),
-        #                                  np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
-        # else:
-        #     joint_cost = np.concatenate([np.diag(avg_death.flatten()),
-        #                                  np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
-
-        #     other_jc_terms = np.matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
-
-        #     joint_cost = np.append(joint_cost, other_jc_terms, axis=1)
-
 
         # Gated Measurement index matrix
         gate_meas_indices = np.zeros((len(self._track_tab), num_meas))
@@ -3579,65 +3625,60 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             num_exists = len(p_hyp.track_set)
             num_tracks = num_births + num_exists
             tindices = np.concatenate((np.arange(0, num_births),
-                                           num_births + np.array(p_hyp.track_set))).astype(int)
+                                       num_births + np.array(p_hyp.track_set))).astype(int)
             lselmask = np.zeros((len(self._track_tab), num_meas), dtype='bool')
             lselmask[tindices, ] = gate_meas_indc[tindices, ]
-            # keys = gate_meas_indices[lselmask].ravel().sort()
+
             keys = np.array([np.sort(gate_meas_indices[lselmask])])
             mindices = self._unique_faster(keys)
 
-            cost_m = np.zeros((len(tindices), len(np.append(np.append(tindices, cpreds + tindices),
-                                                    [2 * cpreds + mindices]))))
+            comb_tind_cpred = np.append(np.append(tindices, cpreds + tindices),
+                                        [2 * cpreds + mindices])
+            cost_m = np.zeros((len(tindices),
+                               len(comb_tind_cpred)))
             cmi = 0
             for ind in tindices:
-                cost_m[cmi,:] = joint_cost[ind, np.append(np.append(tindices, cpreds + tindices), [2 * cpreds + mindices])]
+                cost_m[cmi, :] = joint_cost[ind, comb_tind_cpred]
                 cmi = cmi + 1
 
-            # if num_meas == 0:
-            #     cost_m = joint_cost[tindices, [tindices, cpreds + tindices]].T
-            # else:
-            #     cost_m = np.zeros((len(tindices), len(np.append(np.append(tindices, cpreds + tindices),
-            #                                             [2 * cpreds + mindices]))))
-            #     cmi = 0
-            #     for ind in tindices:
-            #         cost_m[cmi,:] = joint_cost[ind, np.append(np.append(tindices, cpreds + tindices), [2 * cpreds + mindices])]
-            #         cmi = cmi + 1
+            max_row_inds, max_col_inds = np.where(cost_m >= np.inf)
+            if max_row_inds.size > 0:
+                cost_m[max_row_inds, max_col_inds] = np.finfo(float).max
+
+            min_row_inds, min_col_inds = np.where(cost_m <= 0.)
+            if min_row_inds.size > 0:
+                cost_m[min_row_inds, min_col_inds] = np.finfo(float).eps
 
             neg_log = -np.log(cost_m)
-            m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob)/ ss_w)
-            m = int(m.item())+1
-            # if num_meas == 0:
-            #     m = 1
 
-            [assigns, costs] = gibbs(neg_log, m) # (rename)
-            #this whole section may need to be redone or re-evaluated based on how indexing works in python vs matlab
-            assigns[assigns<num_tracks] = -np.inf*np.ones(np.shape(assigns[assigns<num_tracks]))
+            m = np.round(self.req_upd * np.sqrt(p_hyp.assoc_prob) / ss_w)
+            m = int(m.item()) + 1
+
+            [assigns, costs] = gibbs(neg_log, m)
+            assigns[assigns < num_tracks] = -np.inf
             for ii in range(np.shape(assigns)[0]):
                 if len(np.shape(assigns)) < 2:
-                    if assigns[ii] >= num_tracks and assigns[ii] < 2*num_tracks:
+                    if assigns[ii] >= num_tracks and assigns[ii] < 2 * num_tracks:
                         assigns[ii] = -1
                 else:
                     for jj in range(np.shape(assigns)[1]):
-                        if assigns[ii][jj] >= num_tracks and assigns[ii][jj] < 2*num_tracks:
-                           assigns[ii][jj] = -1
-            assigns[assigns >= 2*num_tracks-1] = assigns[assigns >= 2*num_tracks-1]-(2*num_tracks)
-            if assigns[assigns>=0].size != 0:
-                assigns[assigns>=0] = mindices[assigns.astype(int)[assigns.astype(int)>=0]]
-            dummydebug2 = 1
-            # for c in range(0, len(costs)):
+                        if assigns[ii][jj] >= num_tracks and assigns[ii][jj] < 2 * num_tracks:
+                            assigns[ii][jj] = -1
+
+            assigns[assigns >= (2 * num_tracks - 1)] -= 2 * num_tracks
+            if assigns[assigns >= 0].size != 0:
+                assigns[assigns >= 0] = mindices[assigns.astype(int)[assigns.astype(int) >= 0]]
+
             for c, cst in enumerate(costs.flatten()):
                 update_hyp_cmp_temp = assigns[c, ]
-                # update_hyp_cmp_idx = cpreds*(update_hyp_cmp_temp) + \ # wrong cardinality
-                # update_hyp_cmp_idx = cpreds*(update_hyp_cmp_temp+1) + \ # strange error with joint cost matrix
-                update_hyp_cmp_idx = cpreds*(update_hyp_cmp_temp + 1) + \
+                update_hyp_cmp_idx = cpreds * (update_hyp_cmp_temp + 1) + \
                     np.append(np.array([np.arange(0, num_births)]), num_births + np.array([p_hyp.track_set]))
                 new_hyp = self._HypothesisHelper()
-                new_hyp.assoc_prob = -self.clutter_rate + num_meas *np.log(clutter) \
+                new_hyp.assoc_prob = -self.clutter_rate + num_meas * np.log(clutter) \
                     + np.log(p_hyp.assoc_prob) - cst
-                new_hyp.track_set = update_hyp_cmp_idx[update_hyp_cmp_idx>=0].astype(int)
+                new_hyp.track_set = update_hyp_cmp_idx[update_hyp_cmp_idx >= 0].astype(int)
                 up_hyp.append(new_hyp)
 
-        dummydebug1 = 1
         lse = log_sum_exp([x.assoc_prob for x in up_hyp])
         for ii in range(0, len(up_hyp)):
             up_hyp[ii].assoc_prob = np.exp(up_hyp[ii].assoc_prob - lse)
@@ -3648,14 +3689,30 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         self._clean_predictions()
         self._clean_updates()
         self._old_track_tab = self._track_tab
-        dummythingfordebugging=1
 
-class GSMGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
-    """Implementation of a GSM-GLMB filter.
 
-    The implementation of the GSM-GLMB fitler does not change for different core
-    filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use any
-    of the GSM inner filters from gncpy.filters
+class STMJointGeneralizedLabeledMultiBernoulli(_STMGLMBBase,
+                                               JointGeneralizedLabeledMultiBernoulli):
+    """Implementation of a STM-JGLMB class."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class SMCJointGeneralizedLabeledMultiBernoulli(_SMCGLMBBase,
+                                               JointGeneralizedLabeledMultiBernoulli):
+    """Implementation of a SMC-JGLMB filter."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class GSMJointGeneralizedLabeledMultiBernoulli(JointGeneralizedLabeledMultiBernoulli):
+    """Implementation of a GSM-JGLMB filter.
+
+    The implementation of the GSM-JGLMB fitler does not change for different
+    core filters (i.e. QKF GSM, SQKF GSM, UKF GSM, etc.) so this class can use
+    any of the GSM inner filters from gncpy.filters
     """
 
     def __init__(self, **kwargs):
