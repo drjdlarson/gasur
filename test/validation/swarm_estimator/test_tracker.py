@@ -11,7 +11,7 @@ import gncpy.filters as gfilts
 import gncpy.dynamics as gdyn
 import gncpy.distributions as gdistrib
 import gasur.swarm_estimator.tracker as tracker
-from gasur.utilities.distributions import GaussianMixture, StudentsTMixture
+import gasur.utilities.distributions as gasdist
 
 
 global_seed = 69
@@ -413,7 +413,7 @@ def _setup_ekf_gsm(dt, rng, m_dfs, m_vars):
 def _setup_phd_double_int_birth():
     mu = [np.array([10., 0., 0., 0.]).reshape((4, 1))]
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
-    gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
+    gm0 = gasdist.GaussianMixture(means=mu, covariances=cov, weights=[1])
 
     return [gm0, ]
 
@@ -421,7 +421,7 @@ def _setup_phd_double_int_birth():
 def _setup_gm_glmb_double_int_birth():
     mu = [np.array([10., 0., 0., 1.]).reshape((4, 1))]
     cov = [np.diag(np.array([1, 1, 1, 1]))**2]
-    gm0 = GaussianMixture(means=mu, covariances=cov, weights=[1])
+    gm0 = gasdist.GaussianMixture(means=mu, covariances=cov, weights=[1])
 
     # return [(gm0, 0.03), ]
     return [(gm0, 0.003), ]
@@ -430,7 +430,7 @@ def _setup_gm_glmb_double_int_birth():
 def _setup_stm_glmb_double_int_birth():
     mu = [np.array([10., 0., 0., 1.]).reshape((4, 1))]
     scale = [np.diag(np.array([1, 1, 1, 1]))**2]
-    stm0 = StudentsTMixture(means=mu, scalings=scale, weights=[1])
+    stm0 = gasdist.StudentsTMixture(means=mu, scalings=scale, weights=[1])
 
     return [(stm0, 0.003), ]
 
@@ -488,7 +488,7 @@ def _setup_gsm_birth():
     # note: GSM filter assumes noise is conditionally Gaussian so use GM with 1 term for birth
     means = [np.array([2000, 2000, 20, 20, 0, 0]).reshape((6, 1))]
     cov = [np.diag((5 * 10**4, 5 * 10**4, 8, 8, 0.02, 0.02))]
-    gm0 = GaussianMixture(means=means, covariances=cov, weights=[1])
+    gm0 = gasdist.GaussianMixture(means=means, covariances=cov, weights=[1])
 
     return [(gm0, 0.05), ]
 
@@ -621,6 +621,7 @@ def test_PHD():  # noqa
                      'clutter_den': 1**-7, 'clutter_rate': 1**-7}
     phd = tracker.ProbabilityHypothesisDensity(**RFS_base_args)
     phd.gating_on = False
+    phd.save_covs = True
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -641,11 +642,31 @@ def test_PHD():  # noqa
 
         phd.cleanup()
 
-    phd.calculate_ospa(global_true, 2, 1)
+    true_covs = []
+    for ii, lst in enumerate(global_true):
+        true_covs.append([])
+        for jj in lst:
+            true_covs[ii].append(np.diag([7e-5, 7e-5, 0.1, 0.1]))
+
+    phd.calculate_ospa(global_true, 5, 1)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    phd.calculate_ospa(global_true, 5, 1, core_method=gasdist.OSPAMethod.MANHATTAN)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    phd.calculate_ospa(global_true, 1, 1, core_method=gasdist.OSPAMethod.HELLINGER,
+                       true_covs=true_covs)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
+
+    phd.calculate_ospa(global_true, 5, 1, core_method=gasdist.OSPAMethod.MAHALANOBIS)
+    if debug_plots:
+        phd.plot_ospa_history(time=time, time_units='s')
 
     if debug_plots:
         phd.plot_states([0, 1])
-        phd.plot_ospa_history(time=time, time_units='s')
 
     assert len(true_agents) == phd.cardinality, 'Wrong cardinality'
 
@@ -705,7 +726,7 @@ def test_GLMB():  # noqa
     rng = rnd.default_rng(global_seed)
 
     dt = 0.01
-    t0, t1 = 0, 6 + dt
+    t0, t1 = 0, 4.5 + dt  # 6 + dt
 
     filt = _setup_double_int_kf(dt)
     state_mat_args = (dt, 'test arg')
@@ -719,6 +740,12 @@ def test_GLMB():  # noqa
     GLMB_args = {'req_births': len(b_model) + 1, 'req_surv': 1000,
                  'req_upd': 800, 'prune_threshold': 10**-5, 'max_hyps': 1000}
     glmb = tracker.GeneralizedLabeledMultiBernoulli(**GLMB_args, **RFS_base_args)
+    glmb.save_covs = True
+
+    # test save/load filter
+    filt_state = glmb.save_filter_state()
+    glmb = tracker.GeneralizedLabeledMultiBernoulli()
+    glmb.load_filter_state(filt_state)
 
     time = np.arange(t0, t1, dt)
     true_agents = []
@@ -747,13 +774,26 @@ def test_GLMB():  # noqa
     glmb.extract_states(**extract_kwargs)
 
     glmb.calculate_ospa(global_true, 2, 1)
+    if debug_plots:
+        glmb.plot_ospa_history(time=time, time_units='s')
+
+    glmb.calculate_ospa2(global_true, 5, 1, 10)
+    if debug_plots:
+        glmb.plot_ospa2_history(time=time, time_units='s')
+
+    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=gasdist.OSPAMethod.EUCLIDEAN)
+    if debug_plots:
+        glmb.plot_ospa2_history(time=time, time_units='s')
+
+    glmb.calculate_ospa2(global_true, 5, 1, 10, core_method=gasdist.OSPAMethod.MAHALANOBIS)
+    if debug_plots:
+        glmb.plot_ospa2_history(time=time, time_units='s')
 
     if debug_plots:
         glmb.plot_states_labels([0, 1], true_states=global_true,
                                 meas_inds=[0, 1])
         glmb.plot_card_dist()
         glmb.plot_card_history(time_units='s', time=time)
-        glmb.plot_ospa_history()
 
     print('\tExpecting {} agents'.format(len(true_agents)))
 
@@ -1362,6 +1402,11 @@ def test_QKF_GSM_GLMB():  # noqa
     glmb = tracker.GSMGeneralizedLabeledMultiBernoulli(**GLMB_args,
                                                        **RFS_base_args)
 
+    # test save/load filter
+    filt_state = glmb.save_filter_state()
+    glmb = tracker.GSMGeneralizedLabeledMultiBernoulli()
+    glmb.load_filter_state(filt_state)
+
     time = np.arange(t0, t1, dt)
     true_agents = []
     global_true = []
@@ -1619,7 +1664,7 @@ if __name__ == "__main__":
     # test_PHD()
     # test_CPHD()
 
-    test_GLMB()
+    # test_GLMB()
     # test_STM_GLMB()
     # test_SMC_GLMB()
     # test_USMC_GLMB()
@@ -1631,7 +1676,7 @@ if __name__ == "__main__":
     # test_SQKF_GLMB()
     # test_UKF_GLMB()
 
-    # test_QKF_GSM_GLMB()
+    test_QKF_GSM_GLMB()
     # test_SQKF_GSM_GLMB()
     # test_UKF_GSM_GLMB()
     # test_EKF_GSM_GLMB()
