@@ -4,7 +4,7 @@ This module contains the classes and data structures
 for RFS tracking related algorithms.
 """
 import numpy as np
-from numpy.linalg import cholesky, inv
+import numpy.linalg as la
 import numpy.random as rnd
 import numpy.matlib as matlib
 from scipy.optimize import linear_sum_assignment
@@ -13,9 +13,9 @@ from matplotlib.patches import Ellipse
 import matplotlib.animation as animation
 import abc
 from copy import deepcopy
-from warnings import warn
+import warnings
 
-from gasur.utilities.distributions import GaussianMixture
+import gasur.utilities.distributions as gasdist
 from gasur.utilities.graphs import k_shortest, murty_m_best
 from gasur.utilities.sampling import gibbs
 from gncpy.math import log_sum_exp, get_elem_sym_fnc
@@ -80,12 +80,25 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self.ospa = None
         self.ospa_localization = None
         self.ospa_cardinality = None
+        self._ospa_params = {}
 
         self._states = []  # local copy for internal modification
         self._meas_tab = []  # list of lists, one per timestep, inner is all meas at time
         self._covs = []  # local copy for internal modification
 
         super().__init__(**kwargs)
+
+    @property
+    def ospa_method(self):
+        """The distance metric used in the OSPA calculation (read only)."""
+        if 'core' in self._ospa_params:
+            return self._ospa_params['core']
+        else:
+            return None
+
+    @ospa_method.setter
+    def ospa_method(self, val):
+        warnings.warn('OSPA method is read only. SKIPPING')
 
     @abc.abstractmethod
     def save_filter_state(self):
@@ -119,6 +132,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         filt_state['_states'] = self._states
         filt_state['_meas_tab'] = self._meas_tab
         filt_state['_covs'] = self._covs
+        filt_state['_ospa_params'] = self._ospa_params
 
         return filt_state
 
@@ -154,6 +168,7 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         self._states = filt_state['_states']
         self._meas_tab = filt_state['_meas_tab']
         self._covs = filt_state['_covs']
+        self._ospa_params = filt_state['_ospa_params']
 
     @property
     def prob_miss_detection(self):
@@ -244,8 +259,8 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
             est = self.filter.get_est_meas(m, **est_meas_args)
             meas_pred_cov = meas_mat @ p @ meas_mat.T + self.filter.meas_noise
             meas_pred_cov = (meas_pred_cov + meas_pred_cov.T) / 2
-            v_s = cholesky(meas_pred_cov.T)
-            inv_sqrt_m_cov = inv(v_s)
+            v_s = la.cholesky(meas_pred_cov.T)
+            inv_sqrt_m_cov = la.inv(v_s)
 
             for (ii, z) in enumerate(meas):
                 if ii in valid:
@@ -258,18 +273,102 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         valid.sort()
         return [meas[ii] for ii in valid]
 
-    def calculate_ospa(self, truth, c, p):
+    def _ospa_setup_tmat(self, truth, state_dim, true_covs):
+        # get sizes
+        num_timesteps = len(truth)
+        num_objs = 0
+
+        for lst in truth:
+            num_objs = np.max([num_objs,
+                               np.sum([_x is not None for _x in lst]).astype(int)])
+
+        # create matrices
+        true_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
+        true_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
+                                         num_objs))
+
+        for tt, lst in enumerate(truth):
+            for obj_num, s in enumerate(lst):
+                if s is not None:
+                    true_mat[:, tt, obj_num] = s.ravel()
+
+        if true_covs is not None:
+            for tt, lst in enumerate(true_covs):
+                for obj_num, c in enumerate(lst):
+                    if c is not None:
+                        true_cov_mat[:, :, tt, obj_num] = c
+
+        return true_mat, true_cov_mat
+
+    def _ospa_setup_emat(self, state_dim):
+        # get sizes
+        num_timesteps = len(self._states)
+        num_objs = 0
+
+        for lst in self._states:
+            num_objs = np.max([num_objs,
+                               np.sum([_x is not None for _x in lst]).astype(int)])
+
+        # create matrices
+        est_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
+        est_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
+                                        num_objs))
+
+        for tt, lst in enumerate(self._states):
+            for obj_num, s in enumerate(lst):
+                if s is not None:
+                    est_mat[:, tt, obj_num] = s.ravel()
+
+        if self.save_covs:
+            for tt, lst in enumerate(self._covs):
+                for obj_num, c in enumerate(lst):
+                    if c is not None:
+                        est_cov_mat[:, :, tt, obj_num] = c
+
+        return est_mat, est_cov_mat
+
+    def _ospa_input_check(self, core_method, truth, true_covs):
+        if core_method is None:
+            core_method = gasdist.OSPAMethod.EUCLIDEAN
+
+        elif core_method is gasdist.OSPAMethod.MAHALANOBIS and not self.save_covs:
+            msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
+            warnings.warn(msg.format(core_method, gasdist.OSPAMethod.EUCLIDEAN))
+            core_method = gasdist.OSPAMethod.EUCLIDEAN
+
+        elif core_method is gasdist.OSPAMethod.HELLINGER and true_covs is None:
+            msg = 'Must save covariances to calculate {:s} OSPA. Using {:s} instead'
+            warnings.warn(msg.format(core_method, gasdist.OSPAMethod.EUCLIDEAN))
+            core_method = gasdist.OSPAMethod.EUCLIDEAN
+
+        return core_method
+
+    def _ospa_find_s_dim(self, truth):
+        state_dim = None
+        for lst in truth:
+            for _x in lst:
+                if _x is not None:
+                    state_dim = _x.size
+                    break
+            if state_dim is not None:
+                break
+
+        if state_dim is None:
+            for lst in self._states:
+                for _x in lst:
+                    if _x is not None:
+                        state_dim = _x.size
+                        break
+                if state_dim is not None:
+                    break
+
+        return state_dim
+
+    def calculate_ospa(self, truth, c, p, core_method=None,
+                       true_covs=None):
         """Calculates the OSPA distance between the truth at all timesteps.
 
-        Notes
-        -----
-        This calculates the Optimal SubPattern Assignment metric for the
-        extracted states and the supplied truth point distributions. The
-        calculation is based on
-        :cite:`Schuhmacher2008_AConsistentMetricforPerformanceEvaluationofMultiObjectFilters`
-        with much of the math defined in
-        :cite:`Schuhmacher2008_ANewMetricbetweenDistributionsofPointProcesses`.
-        A value is calculated for each timestep available in the data.
+        Wrapper for :func:`.utilities.distributions.calculate_ospa`.
 
         Parameters
         ----------
@@ -283,55 +382,104 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         p : int
             The power of the distance term. Higher values penalize outliers
             more.
+        core_method : :class:`.utilities.distributions.OSPAMethod`, Optional
+            The main distance measure to use for the localization component.
+            The default value of None implies :attr:`.OSPAMethod.EUCLIDEAN`.
+        true_covs : list, Optional
+            Each element represents a timestep and is a list of N x N numpy arrays
+            corresonponding to the uncertainty about the true states. Note the
+            order must be consistent with the truth data given. This is only
+            needed for core methods :attr:`OSPAMethod.HELLINGER`. The defautl
+            value is None.
         """
-        num_timesteps = len(self._states)
-        self.ospa = np.nan * np.ones(num_timesteps)
-        self.ospa_localization = np.nan * np.ones(num_timesteps)
-        self.ospa_cardinality = np.nan * np.ones(num_timesteps)
-        for ii, (x_lst, y_lst) in enumerate(zip(self._states, truth)):
-            x_empty = x_lst is None or len(x_lst) == 0
-            y_empty = y_lst is None or len(y_lst) == 0
+        # error checking on optional input arguments
+        core_method = self._ospa_input_check(core_method, truth, true_covs)
 
-            if x_empty and y_empty:
-                self.ospa[ii] = 0
-                self.ospa_localization[ii] = 0
-                self.ospa_cardinality[ii] = 0
-                continue
+        # setup data structures
+        state_dim = self._ospa_find_s_dim(truth)
+        if state_dim is None:
+            warnings.warn('Failed to get state dimension. SKIPPING OSPA calculation')
 
-            if x_empty or y_empty:
-                self.ospa[ii] = c
-                self.ospa_localization[ii] = 0
-                self.ospa_cardinality[ii] = c
-                continue
+            nt = len(self._states)
+            self.ospa = np.zeros(nt)
+            self.ospa_localization = np.zeros(nt)
+            self.ospa_cardinality = np.zeros(nt)
+            self._ospa_params['core'] = core_method
+            self._ospa_params['cutoff'] = c
+            self._ospa_params['power'] = p
+            return
 
-            # create row matrices of data
-            x = np.stack([vec.flatten() for vec in x_lst])
-            y = np.stack([vec.flatten() for vec in y_lst])
+        true_mat, true_cov_mat = self._ospa_setup_tmat(truth, state_dim,
+                                                       true_covs)
+        est_mat, est_cov_mat = self._ospa_setup_emat(state_dim)
 
-            n = x.shape[0]
-            m = y.shape[0]
+        # find OSPA
+        (self.ospa, self.ospa_localization, self.ospa_cardinality,
+         self._ospa_params['core'], self._ospa_params['cutoff'],
+         self._ospa_params['power']) = gasdist.calculate_ospa(est_mat,
+                                                              true_mat, c, p,
+                                                              use_empty=True,
+                                                              core_method=core_method,
+                                                              true_cov_mat=true_cov_mat,
+                                                              est_cov_mat=est_cov_mat)[0:6]
 
-            x_mat = np.tile(x, (m, 1))
-            # set y_mat to repeat each value of y n times in a row
-            y_mat = np.tile(y, (1, x.shape[0])).reshape((n * m, y.shape[1]))
+    def _plt_ospa_hist(self, y_val, time_units, time, ttl, y_lbl, opts):
+        fig = opts['f_hndl']
 
-            # get distances and set cutoff
-            dists = np.sqrt(np.sum((x_mat - y_mat)**2, axis=1)).reshape((m, n))
-            dists = np.minimum(dists, c)**p
+        if fig is None:
+            fig = plt.figure()
+            fig.add_subplot(1, 1, 1)
 
-            # use hungarian to find minimum distances for getting total cost
-            row_ind, col_ind = linear_sum_assignment(dists)
-            cost = dists[row_ind, col_ind].sum()
+        if time is None:
+            time = np.arange(y_val.size, dtype=int)
 
-            inv_max_card = 1 / np.max([n, m])
-            card_diff = np.abs(n - m)
-            inv_p = 1 / p
-            c_p = c**p
-            self.ospa[ii] = (inv_max_card * (c_p * card_diff + cost))**inv_p
-            self.ospa_localization[ii] = (inv_max_card * cost)**inv_p
-            self.ospa_cardinality[ii] = (inv_max_card * c_p * card_diff)**inv_p
+        fig.axes[0].grid(True)
+        fig.axes[0].ticklabel_format(useOffset=False)
+        fig.axes[0].plot(time, y_val)
 
-    def plot_ospa_history(self, time_units='index', time=None, **kwargs):
+        pltUtil.set_title_label(fig, 0, opts, ttl=ttl,
+                                x_lbl='Time ({})'.format(time_units),
+                                y_lbl=y_lbl)
+        fig.tight_layout()
+
+        return fig
+
+    def _plt_ospa_hist_subs(self, y_vals, time_units, time, ttl, y_lbls, opts):
+        fig = opts['f_hndl']
+        new_plot = fig is None
+        num_subs = len(y_vals)
+
+        if new_plot:
+            fig = plt.figure()
+
+        pltUtil.set_title_label(fig, 0, opts, ttl=ttl)
+        for ax, (y_val, y_lbl) in enumerate(zip(y_vals, y_lbls)):
+            if new_plot:
+                if ax > 0:
+                    kwargs = {'sharex': fig.axes[0]}
+                else:
+                    kwargs = {}
+                fig.add_subplot(num_subs, 1, ax + 1, **kwargs)
+                fig.axes[ax].grid(True)
+                fig.axes[ax].ticklabel_format(useOffset=False)
+                kwargs = {'y_lbl': y_lbl}
+                if ax == len(y_vals) - 1:
+                    kwargs['x_lbl'] = 'Time ({})'.format(time_units)
+
+                pltUtil.set_title_label(fig, ax, opts, **kwargs)
+
+            if time is None:
+                time = np.arange(y_val.size, dtype=int)
+
+            fig.axes[ax].plot(time, y_val)
+
+        if new_plot:
+            fig.tight_layout()
+
+        return fig
+
+    def plot_ospa_history(self, time_units='index', time=None, main_opts=None,
+                          sub_opts=None, plot_subs=True):
         """Plots the OSPA history.
 
         This requires that the OSPA has been calcualted by the approriate
@@ -345,39 +493,57 @@ class RandomFiniteSetBase(metaclass=abc.ABCMeta):
         time : numpy array, optional
             Vector to use for the x-axis of the plot. If none is given then
             vector indices are used. The default is None.
-        **kwargs : dict
+        main_opts : dict, optional
             Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
             function. Values implemented here are `f_hndl`, and any values
-            relating to title/axis text formatting.
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the main plot.
+        sub_opts : dict, optional
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the sub plot.
+        plot_subs : bool, optional
+            Flag indicating if the component statistics (cardinality and
+            localization) should also be plotted.
 
         Returns
         -------
-        fig : matplotlib figure
-            Figure object the data was plotted on.
+        figs : dict
+            Dictionary of matplotlib figure objects the data was plotted on.
         """
         if self.ospa is None:
-            warn('OSPA must be calculated before plotting')
+            warnings.warn('OSPA must be calculated before plotting')
             return
 
-        opts = pltUtil.init_plotting_opts(**kwargs)
-        fig = opts['f_hndl']
+        if main_opts is None:
+            main_opts = pltUtil.init_plotting_opts()
 
-        if fig is None:
-            fig = plt.figure()
-            fig.add_subplot(1, 1, 1)
+        if sub_opts is None and plot_subs:
+            sub_opts = pltUtil.init_plotting_opts()
 
-        if time is None:
-            time = np.arange(self.ospa.size, dtype=int)
+        fmt = '{:s} OSPA (c = {:.1f}, p = {:d})'
+        ttl = fmt.format(self._ospa_params['core'],
+                         self._ospa_params['cutoff'],
+                         self._ospa_params['power'])
+        y_lbl = 'OSPA'
 
-        fig.axes[0].grid(True)
-        fig.axes[0].plot(time, self.ospa)
+        figs = {}
+        figs['OSPA'] = self._plt_ospa_hist(self.ospa, time_units, time, ttl,
+                                           y_lbl, main_opts)
 
-        pltUtil.set_title_label(fig, 0, opts, ttl="OSPA Metric",
-                                x_lbl='Time ({})'.format(time_units),
-                                y_lbl="OSPA")
-        fig.tight_layout()
+        if plot_subs:
+            fmt = '{:s} OSPA Components (c = {:.1f}, p = {:d})'
+            ttl = fmt.format(self._ospa_params['core'],
+                             self._ospa_params['cutoff'],
+                             self._ospa_params['power'])
+            y_lbls = ['Localiztion', 'Cardinality']
+            figs['OSPA_subs'] = self._plt_ospa_hist_subs([self.ospa_localization,
+                                                          self.ospa_cardinality],
+                                                         time_units, time, ttl,
+                                                         y_lbls, main_opts)
 
-        return fig
+        return figs
 
 
 class ProbabilityHypothesisDensity(RandomFiniteSetBase):
@@ -418,7 +584,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         self.merge_threshold = merge_threshold
         self.max_gauss = max_gauss
 
-        self._gaussMix = GaussianMixture()
+        self._gaussMix = gasdist.GaussianMixture()
 
         super().__init__(**kwargs)
 
@@ -469,7 +635,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
                 empty list
         """
         if not self.save_covs:
-            raise RuntimeWarning("Not saving covariances")
+            warnings.warn("Not saving covariances")
             return []
         if len(self._covs) > 0:
             return self._covs[-1]
@@ -536,7 +702,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         """
         gm_tup = zip(probDensity.means,
                      probDensity.covariances)
-        gm = GaussianMixture()
+        gm = gasdist.GaussianMixture()
         gm.weights = [self.prob_survive * x for x in probDensity.weights.copy()]
         for ii, (m, P) in enumerate(gm_tup):
             self.filter.cov = P
@@ -620,7 +786,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
             corrected probability density.
 
         """
-        gm = GaussianMixture()
+        gm = gasdist.GaussianMixture()
         det_weights = [self.prob_detection * x for x in probDensity.weights]
         for z in meas:
             w_lst = []
@@ -662,7 +828,7 @@ class ProbabilityHypothesisDensity(RandomFiniteSetBase):
         while len(loop_inds) > 0:
             jj = np.argmax(self._gaussMix.weights)
             comp_inds = []
-            inv_cov = inv(self._gaussMix.covariances[jj])
+            inv_cov = la.inv(self._gaussMix.covariances[jj])
             for ii in loop_inds:
                 diff = self._gaussMix.means[ii] - self._gaussMix.means[jj]
                 val = diff.T @ inv_cov @ diff
@@ -1409,7 +1575,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
             n_agents = round(self._gaussMix.weights[idx])
             if n_agents <= 0:
                 msg = "Gaussian weights are 0 before reaching cardinality"
-                warn(msg, RuntimeWarning)
+                warnings.warn(msg, RuntimeWarning)
                 break
 
             tot_agents += n_agents
@@ -1527,7 +1693,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                 t_len = len(x_vals)
                 msg = "True Cardinality vector length ({})".format(c_len) \
                     + " does not match time vector length ({})".format(t_len)
-                warn(msg)
+                warnings.warn(msg)
             else:
                 f_hndl.axes[0].plot(x_vals, true_card, color='g',
                                     label='True Cardinality',
@@ -1542,6 +1708,8 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
                                 linestyle='--', color='r', label=lbl)
             f_hndl.axes[0].plot(x_vals, [x - s for (x, s) in zip(card, stds)],
                                 linestyle='--', color='r')
+
+        f_hndl.axes[0].ticklabel_format(useOffset=False)
 
         if lgnd_loc is not None:
             plt.legend(loc=lgnd_loc)
@@ -1585,7 +1753,7 @@ class CardinalizedPHD(ProbabilityHypothesisDensity):
 
         if not self.debug_plots:
             msg = 'Debug plots turned off'
-            warn(msg)
+            warnings.warn(msg)
             return f_hndl
 
         if f_hndl is None:
@@ -1718,6 +1886,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             be updated once per time step."""
         self._time_index_cntr = 0
 
+        self.ospa2 = None
+        self.ospa2_localization = None
+        self.ospa2_cardinality = None
+        self._ospa2_params = {}
+
         super().__init__(**kwargs)
 
     def save_filter_state(self):
@@ -1730,6 +1903,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         filt_state['req_births'] = self.req_births
         filt_state['req_surv'] = self.req_surv
+        filt_state['req_upd'] = self.req_upd
         filt_state['gating_on'] = self.gating_on
         filt_state['prune_threshold'] = self.prune_threshold
         filt_state['max_hyps'] = self.max_hyps
@@ -1750,6 +1924,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         filt_state['_card_dist'] = self._card_dist
         filt_state['_time_index_cntr'] = self._time_index_cntr
 
+        filt_state['ospa2'] = self.ospa2
+        filt_state['ospa2_localization'] = self.ospa2_localization
+        filt_state['ospa2_cardinality'] = self.ospa2_cardinality
+        filt_state['_ospa2_params'] = self._ospa_params
+
         return filt_state
 
     def load_filter_state(self, filt_state):
@@ -1764,6 +1943,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         self.req_births = filt_state['req_births']
         self.req_surv = filt_state['req_surv']
+        self.req_upd = filt_state['req_upd']
         self.gating_on = filt_state['gating_on']
         self.prune_threshold = filt_state['prune_threshold']
         self.max_hyps = filt_state['max_hyps']
@@ -1784,6 +1964,11 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         self._hypotheses = filt_state['_hypotheses']
         self._card_dist = filt_state['_card_dist']
         self._time_index_cntr = filt_state['_time_index_cntr']
+
+        self.ospa2 = filt_state['ospa2']
+        self.ospa2_localization = filt_state['ospa2_localization']
+        self.ospa2_cardinality = filt_state['ospa2_cardinality']
+        self._ospa2_params = filt_state['_ospa2_params']
 
     @property
     def states(self):
@@ -2133,8 +2318,6 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                     up_tab[s_to_ii].meas_assoc_hist.append(emm)
                 all_cost_m[ii, emm] = cost
         return up_tab, all_cost_m
-    
-    
 
     def _gen_cor_hyps(self, num_meas, avg_prob_detect, avg_prob_miss_detect,
                       all_cost_m):
@@ -2269,7 +2452,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         """
         # gate measurements by tracks
         if self.gating_on:
-            warn('Gating not implemented yet. SKIPPING', RuntimeWarning)
+            warnings.warn('Gating not implemented yet. SKIPPING', RuntimeWarning)
             # means = []
             # covs = []
             # for ent in self._track_tab:
@@ -2403,7 +2586,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
                         self._covs[tt].append(c)
 
         if not update and not calc_states:
-            warn('Extracting states performed no actions')
+            warnings.warn('Extracting states performed no actions')
 
         return idx_cmp
 
@@ -2565,6 +2748,79 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
             if extract_kwargs is None:
                 extract_kwargs = {}
             self.extract_states(**extract_kwargs)
+
+    def _ospa_setup_emat(self, state_dim):
+        # get sizes
+        num_timesteps = len(self.states)
+        num_objs = 0
+        lbl_to_ind = {}
+
+        for lst in self.labels:
+            for lbl in lst:
+                if lbl is None:
+                    continue
+                key = str(lbl)
+                if key not in lbl_to_ind:
+                    lbl_to_ind[key] = num_objs
+                    num_objs += 1
+
+        # create matrices
+        est_mat = np.nan * np.ones((state_dim, num_timesteps, num_objs))
+        est_cov_mat = np.nan * np.ones((state_dim, state_dim, num_timesteps,
+                                        num_objs))
+
+        for tt, (lbl_lst, s_lst) in enumerate(zip(self.labels, self.states)):
+            for lbl, s in zip(lbl_lst, s_lst):
+                if lbl is None:
+                    continue
+
+                obj_num = lbl_to_ind[str(lbl)]
+                est_mat[:, tt, obj_num] = s.ravel()
+
+        if self.save_covs:
+            for tt, (lbl_lst, c_lst) in enumerate(zip(self.labels,
+                                                      self.covariances)):
+                for lbl, c in zip(lbl_lst, c_lst):
+                    if lbl is None:
+                        continue
+                    est_cov_mat[:, :, tt, lbl_to_ind[str(lbl)]] = c
+
+        return est_mat, est_cov_mat
+
+    def calculate_ospa2(self, truth, c, p, win_len, true_covs=None,
+                        core_method=gasdist.OSPAMethod.MANHATTAN):
+        # error checking on optional input arguments
+        core_method = self._ospa_input_check(core_method, truth, true_covs)
+
+        # setup data structures
+        state_dim = self._ospa_find_s_dim(truth)
+        if state_dim is None:
+            warnings.warn('Failed to get state dimension. SKIPPING OSPA(2) calculation')
+
+            nt = len(self._states)
+            self.ospa2 = np.zeros(nt)
+            self.ospa2_localization = np.zeros(nt)
+            self.ospa2_cardinality = np.zeros(nt)
+            self._ospa2_params['core'] = core_method
+            self._ospa2_params['cutoff'] = c
+            self._ospa2_params['power'] = p
+            self._ospa2_params['win_len'] = win_len
+            return
+
+        true_mat, true_cov_mat = self._ospa_setup_tmat(truth, state_dim,
+                                                       true_covs)
+        est_mat, est_cov_mat = self._ospa_setup_emat(state_dim)
+
+        # find OSPA
+        (self.ospa2, self.ospa2_localization, self.ospa2_cardinality,
+         self._ospa2_params['core'], self._ospa2_params['cutoff'],
+         self._ospa2_params['power'],
+         self._ospa2_params['win_len']) = gasdist.calculate_ospa2(est_mat,
+                                                                  true_mat, c,
+                                                                  p, win_len,
+                                                                  core_method=core_method,
+                                                                  true_cov_mat=true_cov_mat,
+                                                                  est_cov_mat=est_cov_mat)
 
     def plot_states_labels(self, plt_inds, ttl="Labeled State Trajectories",
                            meas_tx_fnc=None, **kwargs):
@@ -2851,6 +3107,7 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
 
         fig.axes[0].grid(True)
         fig.axes[0].step(time, card_history, where='post', label='estimated')
+        fig.axes[0].ticklabel_format(useOffset=False)
 
         pltUtil.set_title_label(fig, 0, opts, ttl=ttl,
                                 x_lbl='Time ({})'.format(time_units),
@@ -2858,6 +3115,75 @@ class GeneralizedLabeledMultiBernoulli(RandomFiniteSetBase):
         fig.tight_layout()
 
         return fig
+
+    def plot_ospa2_history(self, time_units='index', time=None, main_opts=None,
+                           sub_opts=None, plot_subs=True):
+        """Plots the OSPA2 history.
+
+        This requires that the OSPA2 has been calcualted by the approriate
+        function first.
+
+        Parameters
+        ----------
+        time_units : string, optional
+            Text representing the units of time in the plot. The default is
+            'index'.
+        time : numpy array, optional
+            Vector to use for the x-axis of the plot. If none is given then
+            vector indices are used. The default is None.
+        main_opts : dict, optional
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the main plot.
+        sub_opts : dict, optional
+            Additional plotting options for :meth:`gncpy.plotting.init_plotting_opts`
+            function. Values implemented here are `f_hndl`, and any values
+            relating to title/axis text formatting. The default of None implies
+            the default options are used for the sub plot.
+        plot_subs : bool, optional
+            Flag indicating if the component statistics (cardinality and
+            localization) should also be plotted.
+
+        Returns
+        -------
+        figs : dict
+            Dictionary of matplotlib figure objects the data was plotted on.
+        """
+        if self.ospa2 is None:
+            warnings.warn('OSPA must be calculated before plotting')
+            return
+
+        if main_opts is None:
+            main_opts = pltUtil.init_plotting_opts()
+
+        if sub_opts is None and plot_subs:
+            sub_opts = pltUtil.init_plotting_opts()
+
+        fmt = '{:s} OSPA2 (c = {:.1f}, p = {:d}, w={:d})'
+        ttl = fmt.format(self._ospa2_params['core'],
+                         self._ospa2_params['cutoff'],
+                         self._ospa2_params['power'],
+                         self._ospa2_params['win_len'])
+        y_lbl = 'OSPA2'
+
+        figs = {}
+        figs['OSPA2'] = self._plt_ospa_hist(self.ospa2, time_units, time, ttl,
+                                            y_lbl, main_opts)
+
+        if plot_subs:
+            fmt = '{:s} OSPA2 Components (c = {:.1f}, p = {:d}, w={:d})'
+            ttl = fmt.format(self._ospa2_params['core'],
+                             self._ospa2_params['cutoff'],
+                             self._ospa2_params['power'],
+                             self._ospa2_params['win_len'])
+            y_lbls = ['Localiztion', 'Cardinality']
+            figs['OSPA2_subs'] = self._plt_ospa_hist_subs([self.ospa2_localization,
+                                                           self.ospa2_cardinality],
+                                                          time_units, time, ttl,
+                                                          y_lbls, main_opts)
+
+        return figs
 
 
 class _STMGLMBBase:
@@ -2896,7 +3222,7 @@ class _STMGLMBBase:
             factor = self.filter.meas_noise_dof * (self.filter.dof - 2) \
                 / (self.filter.dof * (self.filter.meas_noise_dof - 2))
             P_zz = meas_mat @ p @ meas_mat.T + factor * self.filter.meas_noise
-            inv_P = inv(P_zz)
+            inv_P = la.inv(P_zz)
 
             for (ii, z) in enumerate(meas):
                 if ii in valid:
@@ -3079,7 +3405,7 @@ class _SMCGLMBBase:
         RuntimeWarning
             Function must be implemented.
         """
-        warn('Not implemented for this class')
+        warnings.warn('Not implemented for this class')
 
 
 # Note: need inherited classes in this order for proper MRO
@@ -3121,11 +3447,11 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
     def __init__(self, **kwargs):
         self._old_track_tab = [] # used to store previous track table and initialize survival probability matrix
-    
+
         """ linear index corresponding to timestep, manually updated. Used
             to index things since timestep in label can have decimals. Must
             be updated once per time step."""
-    
+
         super().__init__(**kwargs)
 
     def predict(self, timestep, filt_args={}):
@@ -3158,7 +3484,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         keyind = np.not_equal(difference, 0)
         mindices = (keys[0][np.where(keyind)]).astype(int)
         return mindices
-    
+
     def _gen_cor_tab(self, num_meas, meas, timestep, filt_args):
         num_pred = len(self._track_tab)
         up_tab = [None] * (num_meas + 1) * num_pred
@@ -3198,7 +3524,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
 
         # self._cor_timesteps.append(timestep)
         # gating by tracks
-        
+
         if self.gating_on:
             RuntimeError('Gating not implemented yet. PLEASE TURN OFF GATING')
             # for ent in self._track_tab:
@@ -3238,7 +3564,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         # wrong here because the filter is getting the best possible estimate,
         # but there's a lack of time_index which communicates some issues.
         # Could also be a problem with the meas_assoc_hist thing, but probably not.
-        
+
         [up_tab, all_cost_m] = self._gen_cor_tab(num_meas, meas, timestep, filt_args)
 
         clutter = self.clutter_rate * self.clutter_den
@@ -3249,7 +3575,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
         other_jc_terms = matlib.repmat(avg_surv * avg_detect, 1, num_meas) * all_cost_m / (clutter)
 
         joint_cost = np.append(joint_cost, other_jc_terms, axis=1)
-        
+
         # if num_meas == 0:
         #     joint_cost = np.concatenate([np.diag(avg_death.flatten()),
         #                                  np.diag(avg_surv.flatten() * avg_miss.flatten())], axis=1)
@@ -3293,7 +3619,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             for ind in tindices:
                 cost_m[cmi,:] = joint_cost[ind, np.append(np.append(tindices, cpreds + tindices), [2 * cpreds + mindices])]
                 cmi = cmi + 1
-                
+
             # if num_meas == 0:
             #     cost_m = joint_cost[tindices, [tindices, cpreds + tindices]].T
             # else:
@@ -3324,7 +3650,7 @@ class JointGeneralizedLabeledMultiBernoulli(GeneralizedLabeledMultiBernoulli):
             assigns[assigns >= 2*num_tracks-1] = assigns[assigns >= 2*num_tracks-1]-(2*num_tracks)
             if assigns[assigns>=0].size != 0:
                 assigns[assigns>=0] = mindices[assigns.astype(int)[assigns.astype(int)>=0]]
-            dummydebug2 = 1    
+            dummydebug2 = 1
             # for c in range(0, len(costs)):
             for c, cst in enumerate(costs.flatten()):
                 update_hyp_cmp_temp = assigns[c, ]
